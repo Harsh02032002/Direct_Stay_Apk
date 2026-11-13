@@ -1,0 +1,36 @@
+{
+  "expo": {
+    "name": "DirectStay Admin",
+    "slug": "directstay-admin-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "directstayadmin",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": false,
+    "splash": {
+      "backgroundColor": "#17120F",
+      "resizeMode": "contain"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.directstay.admin"
+    },
+    "android": {
+      "package": "com.directstay.admin",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "backgroundColor": "#17120F"
+      },
+      "permissions": [
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE"
+      ]
+    },
+    "extra": {
+      "apiBaseUrl": "https://directstay.online"
+    }
+  }
+}

@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  DirectStay Admin Mobile — APK Build & GitHub CI Configuration Descriptor
+  Scope: /admin Hotel Operations Panel Only (Bottom Navigation Bar)
+  Live API Base: https://directstay.online/api
+-->
+<apkBuildConfig version="1.0" project="directstay-admin-mobile">
+  <application>
+    <name>DirectStay Admin</name>
+    <packageId>com.directstay.admin</packageId>
+    <versionName>1.0.0</versionName>
+    <versionCode>1</versionCode>
+    <portalScope>/admin</portalScope>
+    <navigationLayout>bottom-tab-bar</navigationLayout>
+  </application>
+
+  <theme>
+    <espressoDark>#17120F</espressoDark>
+    <goldPrimary>#C49A3A</goldPrimary>
+    <goldLight>#E0BD6B</goldLight>
+    <surfaceBackground>#F8FAFC</surfaceBackground>
+  </theme>
+
+  <liveApi baseUrl="https://directstay.online">
+    <endpoint name="login" method="POST" path="/api/auth/login" portalMode="admin" />
+    <endpoint name="logout" method="POST" path="/api/auth/logout" />
+    <endpoint name="fetchState" method="GET" path="/api/db/state" />
+    <endpoint name="savePmsData" method="POST" path="/api/pms-data" />
+    <endpoint name="generateInvoice" method="POST" path="/api/invoices/generate" />
+  </liveApi>
+
+  <androidNativePaths>
+    <manifest>android/app/src/main/AndroidManifest.xml</manifest>
+    <networkSecurityConfig>android/app/src/main/res/xml/network_security_config.xml</networkSecurityConfig>
+    <strings>android/app/src/main/res/values/strings.xml</strings>
+    <colors>android/app/src/main/res/values/colors.xml</colors>
+    <styles>android/app/src/main/res/values/styles.xml</styles>
+    <gradleWrapper>android/gradlew</gradleWrapper>
+    <appBuildGradle>android/app/build.gradle</appBuildGradle>
+  </androidNativePaths>
+
+  <ciPipeline provider="github-actions" workflow=".github/workflows/build-apk.yml">
+    <javaVersion>17</javaVersion>
+    <nodeVersion>20</nodeVersion>
+    <gradleCommand>./gradlew assembleDebug assembleRelease --no-daemon</gradleCommand>
+    <artifacts>
+      <artifact name="DirectStay-Admin-Release-APK" file="dist-apk/DirectStay-Admin-Release.apk" />
+      <artifact name="DirectStay-Admin-Debug-APK" file="dist-apk/DirectStay-Admin-Debug.apk" />
+    </artifacts>
+  </ciPipeline>
+</apkBuildConfig>

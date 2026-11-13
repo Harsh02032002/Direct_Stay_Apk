@@ -1,0 +1,76 @@
+name: Build DirectStay Admin APK
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  build-android-apk:
+    name: Build Release & Debug APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Setup Java JDK 17 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Gradle Cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install NPM dependencies
+        run: npm install --legacy-peer-deps
+
+      - name: Ensure Android native directory & XML configs are up to date
+        run: |
+          if [ ! -f "android/gradlew" ]; then
+            CI=1 npx expo prebuild --platform android --no-install
+          fi
+          chmod +x android/gradlew
+
+      - name: Build Android Debug & Release APKs
+        working-directory: ./android
+        run: ./gradlew assembleDebug assembleRelease --no-daemon
+
+      - name: Copy & Rename APK outputs
+        run: |
+          mkdir -p dist-apk
+          cp android/app/build/outputs/apk/release/app-release.apk dist-apk/DirectStay-Admin-Release.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist-apk/DirectStay-Admin-Debug.apk
+          ls -lh dist-apk/
+
+      - name: Upload DirectStay Admin Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: DirectStay-Admin-Release-APK
+          path: dist-apk/DirectStay-Admin-Release.apk
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload DirectStay Admin Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: DirectStay-Admin-Debug-APK
+          path: dist-apk/DirectStay-Admin-Debug.apk
+          if-no-files-found: error
+          retention-days: 30
