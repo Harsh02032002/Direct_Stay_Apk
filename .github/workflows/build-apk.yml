@@ -46,6 +46,7 @@ jobs:
           if [ ! -f "android/gradlew" ]; then
             CI=1 npx expo prebuild --platform android --no-install
           fi
+          sed -i 's/\r$//' android/gradlew
           chmod +x android/gradlew
 
       - name: Build Android Debug & Release APKs
