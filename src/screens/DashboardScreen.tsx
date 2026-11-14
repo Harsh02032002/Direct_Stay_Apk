@@ -18,23 +18,26 @@ import {
 } from 'lucide-react-native';
 import { usePms } from '../context/PmsContext';
 import { COLORS } from '../theme/colors';
-import { AdminBottomTab } from '../components/BottomTabBar';
+import { AdminModuleId } from '../types/pms';
+import { ALL_ADMIN_MODULES } from '../components/ModulesDrawerModal';
 
 interface DashboardScreenProps {
-  onNavigateTab: (tab: AdminBottomTab) => void;
+  onNavigateModule: (mod: AdminModuleId) => void;
 }
 
 function formatINR(val: number): string {
   return `₹${Number(val || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
 }
 
-export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onNavigateTab }) => {
+export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onNavigateModule }) => {
   const { state, syncing, refreshLiveState, hotelProfile } = usePms();
   const todayStr = new Date().toISOString().slice(0, 10);
 
   const totalRooms = state.rooms.length;
   const occupiedCount = state.rooms.filter((r) => r.status === 'Occupied').length;
-  const availableCount = state.rooms.filter((r) => r.status === 'Available' || r.status === 'Clean').length;
+  const availableCount = state.rooms.filter(
+    (r) => r.status === 'Available' || r.status === 'Clean'
+  ).length;
   const dirtyCount = state.rooms.filter((r) => r.status === 'Dirty').length;
   const reservedCount = state.rooms.filter((r) => r.status === 'Reserved').length;
   const occupancyPct = totalRooms > 0 ? Math.round((occupiedCount / totalRooms) * 100) : 0;
@@ -58,85 +61,160 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onNavigateTab 
     >
       {/* Hero Property Strip */}
       <View style={styles.heroCard}>
-        <View style={{ flex: 1 }}>
+        <View style={{ flex: 1, marginRight: 12 }}>
           <Text style={styles.heroOverline}>LIVE PROPERTY OVERVIEW</Text>
-          <Text style={styles.heroTitle}>{hotelProfile?.name || 'Hotel Admin Desk'}</Text>
+          <Text style={styles.heroTitle} numberOfLines={1}>
+            {hotelProfile?.name || 'Hotel Admin Desk'}
+          </Text>
           <Text style={styles.heroSub}>
             {occupiedCount}/{totalRooms} Occupied ({occupancyPct}%) • {availableCount} Ready Rooms
           </Text>
         </View>
         <View style={styles.occCircle}>
-          <Text style={styles.occValue}>{occupancyPct}%</Text>
-          <Text style={styles.occLabel}>OCCUPANCY</Text>
+          <Text style={styles.occValue} numberOfLines={1}>
+            {occupancyPct}%
+          </Text>
+          <Text style={styles.occLabel} numberOfLines={1}>
+            OCCUPANCY
+          </Text>
         </View>
       </View>
 
-      {/* Quick Front Desk Actions */}
+      {/* Quick Front Desk Actions (Responsive Padded Pills — Never Clips!) */}
       <View style={styles.quickRow}>
         <TouchableOpacity
           activeOpacity={0.85}
-          onPress={() => onNavigateTab('frontDesk')}
+          onPress={() => onNavigateModule('frontDesk')}
           style={[styles.quickBtn, { backgroundColor: COLORS.gold }]}
         >
-          <CalendarPlus size={18} color={COLORS.espresso} />
-          <Text style={[styles.quickBtnText, { color: COLORS.espresso }]}>
+          <CalendarPlus size={16} color={COLORS.espresso} />
+          <Text
+            style={[styles.quickBtnText, { color: COLORS.espresso }]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.8}
+          >
             + Advance / Walk-In
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
           activeOpacity={0.85}
-          onPress={() => onNavigateTab('invoices')}
+          onPress={() => onNavigateModule('invoice')}
           style={[styles.quickBtn, { backgroundColor: COLORS.espresso }]}
         >
-          <Sparkles size={18} color={COLORS.goldBright} />
-          <Text style={[styles.quickBtnText, { color: COLORS.goldBright }]}>
+          <Sparkles size={16} color={COLORS.goldBright} />
+          <Text
+            style={[styles.quickBtnText, { color: COLORS.goldBright }]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.8}
+          >
             GST & Separate Bills
           </Text>
         </TouchableOpacity>
       </View>
 
-      {/* 4 KPI Cards */}
-      <View style={styles.kpiGrid}>
-        <View style={styles.kpiCard}>
+      {/* 4 KPI Cards in Clean 2x2 Flex Rows */}
+      <View style={styles.kpiRow}>
+        <TouchableOpacity
+          activeOpacity={0.85}
+          onPress={() => onNavigateModule('frontDesk')}
+          style={styles.kpiCard}
+        >
           <View style={[styles.kpiIcon, { backgroundColor: COLORS.emeraldSoft }]}>
             <LogIn size={17} color={COLORS.emerald} />
           </View>
           <Text style={styles.kpiVal}>{todayArrivals.length}</Text>
-          <Text style={styles.kpiLabel}>Today's Arrivals</Text>
-        </View>
+          <Text style={styles.kpiLabel} numberOfLines={1}>
+            Today's Arrivals
+          </Text>
+        </TouchableOpacity>
 
-        <View style={styles.kpiCard}>
+        <TouchableOpacity
+          activeOpacity={0.85}
+          onPress={() => onNavigateModule('frontDesk')}
+          style={styles.kpiCard}
+        >
           <View style={[styles.kpiIcon, { backgroundColor: COLORS.amberSoft }]}>
             <LogOut size={17} color={COLORS.amber} />
           </View>
           <Text style={styles.kpiVal}>{todayDepartures.length}</Text>
-          <Text style={styles.kpiLabel}>Today's Checkouts</Text>
-        </View>
+          <Text style={styles.kpiLabel} numberOfLines={1}>
+            Today's Checkouts
+          </Text>
+        </TouchableOpacity>
+      </View>
 
-        <View style={styles.kpiCard}>
+      <View style={styles.kpiRow}>
+        <TouchableOpacity
+          activeOpacity={0.85}
+          onPress={() => onNavigateModule('rooms')}
+          style={styles.kpiCard}
+        >
           <View style={[styles.kpiIcon, { backgroundColor: COLORS.blueSoft }]}>
             <BedDouble size={17} color={COLORS.blue} />
           </View>
           <Text style={styles.kpiVal}>{availableCount}</Text>
-          <Text style={styles.kpiLabel}>Available ({dirtyCount} Dirty)</Text>
-        </View>
+          <Text style={styles.kpiLabel} numberOfLines={1}>
+            Available ({dirtyCount} Dirty)
+          </Text>
+        </TouchableOpacity>
 
-        <View style={styles.kpiCard}>
+        <TouchableOpacity
+          activeOpacity={0.85}
+          onPress={() => onNavigateModule('reports')}
+          style={styles.kpiCard}
+        >
           <View style={[styles.kpiIcon, { backgroundColor: COLORS.goldSoft }]}>
             <IndianRupee size={17} color={COLORS.goldDark} />
           </View>
-          <Text style={styles.kpiVal}>{formatINR(totalCollected)}</Text>
-          <Text style={styles.kpiLabel}>Folio Collections</Text>
+          <Text style={styles.kpiVal} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
+            {formatINR(totalCollected)}
+          </Text>
+          <Text style={styles.kpiLabel} numberOfLines={1}>
+            Daily & Folio Collection
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Quick Launch: All 15 Admin Sidebar Modules */}
+      <View style={styles.sectionCard}>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle} numberOfLines={1}>
+            All Admin Panel Modules (15)
+          </Text>
+        </View>
+        <View style={styles.modulesGrid}>
+          {ALL_ADMIN_MODULES.filter((m) => m.id !== 'dashboard').map((mod) => {
+            const IconComp = mod.Icon;
+            return (
+              <TouchableOpacity
+                key={mod.id}
+                activeOpacity={0.82}
+                onPress={() => onNavigateModule(mod.id)}
+                style={styles.modTile}
+              >
+                <View style={styles.modIconBox}>
+                  <IconComp size={16} color={COLORS.goldBright} strokeWidth={2.2} />
+                </View>
+                <Text style={styles.modTileText} numberOfLines={2}>
+                  {mod.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
         </View>
       </View>
 
       {/* Live Room Status Strip */}
       <View style={styles.sectionCard}>
         <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Live Room Rack Snapshot</Text>
-          <TouchableOpacity onPress={() => onNavigateTab('rooms')} style={styles.linkBtn}>
+          <Text style={styles.sectionTitle} numberOfLines={1}>
+            Live Room Rack Snapshot
+          </Text>
+          <TouchableOpacity onPress={() => onNavigateModule('rooms')} style={styles.linkBtn}>
             <Text style={styles.linkBtnText}>View All</Text>
-            <ArrowUpRight size={14} color={COLORS.goldDark} />
+            <ArrowUpRight size={13} color={COLORS.goldDark} />
           </TouchableOpacity>
         </View>
         <View style={styles.statusPillsRow}>
@@ -166,10 +244,12 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onNavigateTab 
       {/* Recent Reservations & Stays */}
       <View style={styles.sectionCard}>
         <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Recent Bookings & Active Stays</Text>
-          <TouchableOpacity onPress={() => onNavigateTab('frontDesk')} style={styles.linkBtn}>
+          <Text style={styles.sectionTitle} numberOfLines={1}>
+            Recent Bookings & Active Stays
+          </Text>
+          <TouchableOpacity onPress={() => onNavigateModule('frontDesk')} style={styles.linkBtn}>
             <Text style={styles.linkBtnText}>Manage</Text>
-            <ArrowUpRight size={14} color={COLORS.goldDark} />
+            <ArrowUpRight size={13} color={COLORS.goldDark} />
           </TouchableOpacity>
         </View>
 
@@ -183,13 +263,15 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onNavigateTab 
               (b.gstRate !== undefined && Number(b.gstRate) <= 0);
             return (
               <View key={b.id} style={styles.bookingRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.guestName}>{b.guestName || b.customerName}</Text>
-                  <Text style={styles.bookingMeta}>
+                <View style={{ flex: 1, marginRight: 10 }}>
+                  <Text style={styles.guestName} numberOfLines={1}>
+                    {b.guestName || b.customerName}
+                  </Text>
+                  <Text style={styles.bookingMeta} numberOfLines={2}>
                     Rm {b.roomNumber} • {b.checkInDate} → {b.checkOutDate}
                   </Text>
                 </View>
-                <View style={{ alignItems: 'flex-end' }}>
+                <View style={{ alignItems: 'flex-end', flexShrink: 0 }}>
                   <Text style={styles.amountText}>
                     {formatINR(b.totalPayable || b.bookingAmount || 0)}
                   </Text>
@@ -229,67 +311,70 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onNavigateTab 
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.bg },
-  content: { padding: 14, paddingBottom: 28, gap: 14 },
+  content: { padding: 14, paddingBottom: 28, gap: 12 },
   heroCard: {
     backgroundColor: COLORS.espresso,
     borderRadius: 20,
-    padding: 18,
+    padding: 16,
     flexDirection: 'row',
     alignItems: 'center',
     borderWidth: 1,
     borderColor: 'rgba(196, 154, 58, 0.4)',
   },
   heroOverline: {
-    fontSize: 10,
+    fontSize: 9.5,
     fontWeight: '800',
     color: COLORS.goldBright,
     letterSpacing: 0.8,
     marginBottom: 4,
   },
   heroTitle: {
-    fontSize: 19,
+    fontSize: 18,
     fontWeight: '800',
     color: '#FFFFFF',
     marginBottom: 4,
   },
   heroSub: {
-    fontSize: 12,
+    fontSize: 11.5,
     color: '#C9BCB0',
     fontWeight: '600',
   },
   occCircle: {
-    width: 68,
-    height: 68,
-    borderRadius: 18,
+    minWidth: 86,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 16,
     backgroundColor: 'rgba(196, 154, 58, 0.16)',
     borderWidth: 1,
     borderColor: COLORS.gold,
     alignItems: 'center',
     justifyContent: 'center',
+    flexShrink: 0,
   },
   occValue: { fontSize: 18, fontWeight: '900', color: COLORS.goldBright },
   occLabel: { fontSize: 8.5, fontWeight: '800', color: '#D6C9BE', marginTop: 2 },
   quickRow: { flexDirection: 'row', gap: 10 },
   quickBtn: {
     flex: 1,
-    height: 46,
+    minHeight: 46,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     borderRadius: 14,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 7,
+    gap: 6,
   },
-  quickBtnText: { fontSize: 12.5, fontWeight: '800' },
-  kpiGrid: {
+  quickBtnText: { fontSize: 12, fontWeight: '800', flexShrink: 1 },
+  kpiRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
     gap: 10,
   },
   kpiCard: {
-    width: '48.2%',
+    flex: 1,
     backgroundColor: COLORS.card,
     borderRadius: 16,
-    padding: 14,
+    padding: 13,
     borderWidth: 1,
     borderColor: COLORS.border,
   },
@@ -301,12 +386,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: 8,
   },
-  kpiVal: { fontSize: 19, fontWeight: '800', color: COLORS.textPrimary },
-  kpiLabel: { fontSize: 11.5, color: COLORS.textSecondary, fontWeight: '600', marginTop: 2 },
+  kpiVal: { fontSize: 18, fontWeight: '800', color: COLORS.textPrimary },
+  kpiLabel: { fontSize: 11, color: COLORS.textSecondary, fontWeight: '600', marginTop: 2 },
   sectionCard: {
     backgroundColor: COLORS.card,
     borderRadius: 18,
-    padding: 15,
+    padding: 14,
     borderWidth: 1,
     borderColor: COLORS.border,
   },
@@ -315,10 +400,57 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 12,
+    gap: 8,
   },
-  sectionTitle: { fontSize: 14.5, fontWeight: '800', color: COLORS.textPrimary },
-  linkBtn: { flexDirection: 'row', alignItems: 'center', gap: 3 },
-  linkBtnText: { fontSize: 12, fontWeight: '800', color: COLORS.goldDark },
+  sectionTitle: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '800',
+    color: COLORS.textPrimary,
+  },
+  linkBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: '#FAF6EE',
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#EADBC0',
+    flexShrink: 0,
+  },
+  linkBtnText: { fontSize: 11.5, fontWeight: '800', color: COLORS.goldDark },
+  modulesGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  modTile: {
+    width: '31%',
+    minHeight: 74,
+    backgroundColor: '#FAF8F4',
+    borderRadius: 13,
+    padding: 9,
+    borderWidth: 1,
+    borderColor: '#EAE3D5',
+    justifyContent: 'space-between',
+  },
+  modIconBox: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: COLORS.espresso,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 5,
+  },
+  modTileText: {
+    fontSize: 10.5,
+    fontWeight: '800',
+    color: COLORS.textPrimary,
+    lineHeight: 13.5,
+  },
   statusPillsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   statusPill: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10 },
   statusPillText: { fontSize: 11.5, fontWeight: '800' },
@@ -331,7 +463,7 @@ const styles = StyleSheet.create({
     borderTopColor: '#F1F5F9',
   },
   guestName: { fontSize: 13.5, fontWeight: '800', color: COLORS.textPrimary },
-  bookingMeta: { fontSize: 11.5, color: COLORS.textSecondary, marginTop: 2 },
+  bookingMeta: { fontSize: 11, color: COLORS.textSecondary, marginTop: 2 },
   amountText: { fontSize: 13.5, fontWeight: '800', color: COLORS.textPrimary },
   rowBadges: { flexDirection: 'row', gap: 5, marginTop: 4 },
   miniBadge: { paddingHorizontal: 7, paddingVertical: 2.5, borderRadius: 6 },

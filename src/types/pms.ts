@@ -1,3 +1,20 @@
+export type AdminModuleId =
+  | 'dashboard'
+  | 'frontDesk'
+  | 'invoice'
+  | 'rooms'
+  | 'housekeeping'
+  | 'staff'
+  | 'userList'
+  | 'pos'
+  | 'inventory'
+  | 'otaManager'
+  | 'finance'
+  | 'reports'
+  | 'auditLogs'
+  | 'notifications'
+  | 'profile';
+
 export type RoomStatus =
   | 'Available'
   | 'Occupied'
@@ -14,9 +31,13 @@ export interface Room {
   number: string;
   category: string;
   floor?: string;
+  bedType?: string;
   rate: number;
   status: RoomStatus;
+  cleaningStatus?: string;
   maxOccupancy?: number;
+  extraPersonCharge?: number;
+  amenities?: string[];
 }
 
 export interface Booking {
@@ -69,6 +90,19 @@ export interface ExtraCharge {
   dateTime?: string;
 }
 
+export interface CFormDetails {
+  passportNumber?: string;
+  passportCountry?: string;
+  passportIssueDate?: string;
+  passportExpiryDate?: string;
+  visaNumber?: string;
+  visaType?: string;
+  visaExpiryDate?: string;
+  arrivalDateInIndia?: string;
+  portOfArrival?: string;
+  nextDestination?: string;
+}
+
 export interface GuestCheckIn {
   id: string;
   hotelId?: string;
@@ -79,6 +113,10 @@ export interface GuestCheckIn {
   email?: string;
   address?: string;
   nationality?: string;
+  comingFrom?: string;
+  goingTo?: string;
+  purposeOfVisit?: string;
+  mealPlan?: string;
   idType?: string;
   idNumber?: string;
   aadhaarNumber?: string;
@@ -88,13 +126,22 @@ export interface GuestCheckIn {
   roomType?: string;
   roomRate: number;
   checkInDate: string;
+  arrivalTime?: string;
   checkOutDate: string;
+  departureTime?: string;
+  earlyCheckInCharge?: number;
+  lateCheckOutCharge?: number;
+  extraBedCharge?: number;
   adults?: number;
   children?: number;
   advanceAmount?: number;
   gstRate?: number;
   gstAmount?: number;
   isWithoutGst?: boolean;
+  isCFormRequired?: boolean;
+  cFormData?: CFormDetails;
+  guestSignature?: string;
+  checkedInBy?: string;
   extraCharges?: ExtraCharge[];
   status?: string;
   checkedOutDateTime?: string;
@@ -129,7 +176,12 @@ export interface Invoice {
   isWithoutGst?: boolean;
   isSeparateInvoice?: boolean;
   parentInvoiceId?: string;
-  invoiceType?: 'Booking Invoice' | 'Stay Checkout Invoice' | 'Proforma Invoice' | 'Tax Invoice' | 'Bill of Supply';
+  invoiceType?:
+    | 'Booking Invoice'
+    | 'Stay Checkout Invoice'
+    | 'Proforma Invoice'
+    | 'Tax Invoice'
+    | 'Bill of Supply';
   finalAmount: number;
   advancePaid?: number;
   pendingAmount?: number;
@@ -157,6 +209,7 @@ export interface PosOrder {
   orderNumber?: string;
   orderType: string;
   roomNumber?: string;
+  tableNumber?: string;
   guestName?: string;
   items: Array<{
     itemId: string;
@@ -186,6 +239,80 @@ export interface HousekeepingLog {
   notes?: string;
 }
 
+export interface LaundryOrder {
+  id: string;
+  hotelId?: string;
+  roomNumber: string;
+  guestName?: string;
+  itemsSummary?: string;
+  amount: number;
+  status: string;
+  date: string;
+}
+
+export interface LostFoundItem {
+  id: string;
+  hotelId?: string;
+  itemName: string;
+  roomNumber: string;
+  foundBy?: string;
+  status: string;
+  date: string;
+}
+
+export interface InventoryProduct {
+  id: string;
+  hotelId?: string;
+  name: string;
+  sku?: string;
+  category: string;
+  unit: string;
+  currentStock: number;
+  minStockLevel: number;
+  unitPrice: number;
+}
+
+export interface InventoryPurchase {
+  id: string;
+  hotelId?: string;
+  poNumber?: string;
+  supplierName: string;
+  itemName?: string;
+  quantity?: number;
+  totalAmount: number;
+  status: string;
+  date: string;
+}
+
+export interface SupplierRecord {
+  id: string;
+  hotelId?: string;
+  name: string;
+  phone?: string;
+  category?: string;
+  gstNumber?: string;
+}
+
+export interface OtaChannel {
+  id: string;
+  hotelId?: string;
+  name: string;
+  commissionPct?: number;
+  status: string;
+  lastSyncedAt?: string;
+}
+
+export interface TravelAgent {
+  id: string;
+  hotelId?: string;
+  name: string;
+  agencyName?: string;
+  phone: string;
+  email?: string;
+  commissionRate?: number;
+  status?: string;
+}
+
 export interface Expense {
   id: string;
   hotelId?: string;
@@ -201,17 +328,97 @@ export interface Expense {
   approvalStatus?: string;
 }
 
+export interface PettyCashRecord {
+  id: string;
+  hotelId?: string;
+  type: 'Cash In' | 'Cash Out' | string;
+  description: string;
+  amount: number;
+  date: string;
+  handledBy?: string;
+}
+
+export interface CashBankAccount {
+  id: string;
+  hotelId?: string;
+  accountName: string;
+  accountType: string;
+  bankName?: string;
+  accountNumber?: string;
+  balance: number;
+}
+
+export interface FinanceVoucher {
+  id: string;
+  hotelId?: string;
+  voucherNo: string;
+  voucherType: 'Payment' | 'Receipt' | string;
+  partyName: string;
+  amount: number;
+  paymentMode: string;
+  narration?: string;
+  date: string;
+}
+
+export interface DailyClosing {
+  id: string;
+  hotelId?: string;
+  date: string;
+  shift?: string;
+  cashCollected: number;
+  upiCollected: number;
+  cardCollected?: number;
+  expensesTotal?: number;
+  closedBy?: string;
+  notes?: string;
+}
+
+export interface WaterBottleLog {
+  id: string;
+  hotelId?: string;
+  roomNumber: string;
+  guestName?: string;
+  complimentaryQty: number;
+  chargeableQty: number;
+  amount?: number;
+  date: string;
+}
+
 export interface StaffMember {
   id: string;
   hotelId?: string;
   name: string;
   mobile: string;
+  email?: string;
   department: string;
   designation: string;
   role?: string;
+  shift?: string;
+  salary?: number;
   allowedModules?: string[];
   username: string;
+  password?: string;
+  plainPassword?: string;
   status: string;
+}
+
+export interface AuditLogItem {
+  id: string;
+  hotelId?: string;
+  action: string;
+  performedBy: string;
+  details: string;
+  dateTime: string;
+}
+
+export interface AppNotificationItem {
+  id: string;
+  hotelId?: string;
+  title: string;
+  message: string;
+  type?: string;
+  read?: boolean;
+  createdAt?: string;
 }
 
 export interface HotelProfile {
@@ -223,7 +430,17 @@ export interface HotelProfile {
   emailAddress?: string;
   email?: string;
   gstNumber?: string;
+  website?: string;
+  checkInTime?: string;
+  checkOutTime?: string;
+  invoicePrefix?: string;
+  nextInvoiceSequence?: number;
+  defaultGstRate?: number;
+  isGstEnabled?: boolean;
+  earlyCheckInFee?: number;
+  lateCheckOutFee?: number;
   status?: string;
+  subscriptionPlan?: string;
   subscriptionStatus?: string;
   subscriptionEndDate?: string;
 }
@@ -246,7 +463,24 @@ export interface PmsStateSnapshot {
   invoices: Invoice[];
   posItems: PosItem[];
   posOrders: PosOrder[];
+  posAdvanceBookings: any[];
   cleaningLogs: HousekeepingLog[];
+  laundryOrders: LaundryOrder[];
+  lostAndFound: LostFoundItem[];
+  inventoryProducts: InventoryProduct[];
+  inventoryPurchases: InventoryPurchase[];
+  vendors: SupplierRecord[];
+  otaChannels: OtaChannel[];
+  travelAgents: TravelAgent[];
   expenses: Expense[];
+  pettyCash: PettyCashRecord[];
+  cashBankAccounts: CashBankAccount[];
+  vouchers: FinanceVoucher[];
+  ownerPayments: any[];
+  reimbursements: any[];
+  dailyClosings: DailyClosing[];
+  waterBottles: WaterBottleLog[];
   staff: StaffMember[];
+  auditLogs: AuditLogItem[];
+  notifications: AppNotificationItem[];
 }

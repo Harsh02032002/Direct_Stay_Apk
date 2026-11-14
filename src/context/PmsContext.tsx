@@ -1,16 +1,30 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import {
   AdminSession,
+  AppNotificationItem,
   Booking,
+  DailyClosing,
   Expense,
+  FinanceVoucher,
   GuestCheckIn,
   HotelProfile,
   HousekeepingLog,
+  InventoryProduct,
+  InventoryPurchase,
   Invoice,
+  LaundryOrder,
+  LostFoundItem,
+  OtaChannel,
+  PettyCashRecord,
   PmsStateSnapshot,
+  PosItem,
   PosOrder,
   Room,
   RoomStatus,
+  StaffMember,
+  SupplierRecord,
+  TravelAgent,
+  WaterBottleLog,
 } from '../types/pms';
 import {
   fetchLiveHotelStateApi,
@@ -41,6 +55,7 @@ interface PmsContextValue {
     companyName?: string;
     gstNumber?: string;
     roomNumber: string;
+    roomNumbers?: string[];
     checkInDate: string;
     checkOutDate: string;
     adults: number;
@@ -56,25 +71,43 @@ interface PmsContextValue {
     linkedBookingId?: string;
     guestName: string;
     mobile: string;
+    email?: string;
+    idType?: string;
     aadhaarNumber: string;
     address: string;
+    nationality?: string;
+    comingFrom?: string;
+    goingTo?: string;
+    purposeOfVisit?: string;
+    mealPlan?: string;
     companyName?: string;
     gstNumber?: string;
     roomNumber: string;
+    roomNumbers?: string[];
     checkInDate: string;
+    arrivalTime?: string;
     checkOutDate: string;
+    departureTime?: string;
+    earlyCheckInCharge?: number;
+    lateCheckOutCharge?: number;
+    extraBedCharge?: number;
     adults: number;
+    children?: number;
     ratePerNight: number;
     discount: number;
     withGst: boolean;
     gstRate: number;
     advanceAmount: number;
     paymentMethod: string;
+    isCFormRequired?: boolean;
+    cFormData?: GuestCheckIn['cFormData'];
+    guestSignature?: string;
   }) => Promise<{ ok: boolean; error?: string }>;
   performCheckout: (input: {
     bookingOrCheckInId: string;
     extraChargeDesc?: string;
     extraChargeAmt?: number;
+    lateCheckOutCharge?: number;
     discount: number;
     withGst: boolean;
     gstRate: number;
@@ -88,6 +121,13 @@ interface PmsContextValue {
     includeServices: boolean;
   }) => Promise<{ ok: boolean; invoice?: Invoice; error?: string }>;
   updateRoomStatusOrRate: (roomId: string, status: RoomStatus, newRate?: number) => Promise<void>;
+  addRoomEntity: (input: {
+    number: string;
+    category: string;
+    floor: string;
+    bedType: string;
+    rate: number;
+  }) => Promise<void>;
   createPosOrder: (input: {
     roomNumber?: string;
     guestName?: string;
@@ -95,7 +135,47 @@ interface PmsContextValue {
     postToRoom: boolean;
     paymentMethod: string;
   }) => Promise<{ ok: boolean; error?: string }>;
+  addPosMenuItem: (input: { name: string; category: string; price: number }) => Promise<void>;
   markHousekeepingTaskStatus: (logId: string, status: string, roomNumber: string) => Promise<void>;
+  addHousekeepingTask: (input: {
+    roomNumber: string;
+    assignedStaff: string;
+    cleaningType: string;
+  }) => Promise<void>;
+  addLaundryOrder: (input: {
+    roomNumber: string;
+    guestName: string;
+    itemsSummary: string;
+    amount: number;
+  }) => Promise<void>;
+  addLostFoundItem: (input: {
+    itemName: string;
+    roomNumber: string;
+    foundBy: string;
+  }) => Promise<void>;
+  addInventoryProduct: (input: {
+    name: string;
+    category: string;
+    unit: string;
+    currentStock: number;
+    minStockLevel: number;
+    unitPrice: number;
+  }) => Promise<void>;
+  adjustInventoryStock: (productId: string, delta: number) => Promise<void>;
+  addInventoryPurchase: (input: {
+    supplierName: string;
+    itemName: string;
+    quantity: number;
+    totalAmount: number;
+  }) => Promise<void>;
+  addVendorRecord: (input: { name: string; phone: string; category: string }) => Promise<void>;
+  addTravelAgent: (input: {
+    name: string;
+    agencyName: string;
+    phone: string;
+    commissionRate: number;
+  }) => Promise<void>;
+  upsertOtaChannel: (input: { name: string; commissionPct: number; status: string }) => Promise<void>;
   addExpenseEntry: (input: {
     category: string;
     vendorName: string;
@@ -103,6 +183,41 @@ interface PmsContextValue {
     amount: number;
     paymentMethod: string;
   }) => Promise<void>;
+  addPettyCashEntry: (input: {
+    type: 'Cash In' | 'Cash Out';
+    description: string;
+    amount: number;
+  }) => Promise<void>;
+  addFinanceVoucher: (input: {
+    voucherType: 'Payment' | 'Receipt';
+    partyName: string;
+    amount: number;
+    paymentMode: string;
+    narration: string;
+  }) => Promise<void>;
+  addDailyClosing: (input: {
+    shift: string;
+    cashCollected: number;
+    upiCollected: number;
+    notes: string;
+  }) => Promise<void>;
+  addWaterBottleLog: (input: {
+    roomNumber: string;
+    complimentaryQty: number;
+    chargeableQty: number;
+  }) => Promise<void>;
+  addStaffMember: (input: {
+    name: string;
+    mobile: string;
+    department: string;
+    designation: string;
+    username: string;
+    password: string;
+    salary: number;
+  }) => Promise<void>;
+  toggleStaffStatus: (staffId: string) => Promise<void>;
+  updateHotelProfileSettings: (patch: Partial<HotelProfile>) => Promise<void>;
+  markAllNotificationsRead: () => Promise<void>;
 }
 
 const EMPTY_STATE: PmsStateSnapshot = {
@@ -113,9 +228,26 @@ const EMPTY_STATE: PmsStateSnapshot = {
   invoices: [],
   posItems: [],
   posOrders: [],
+  posAdvanceBookings: [],
   cleaningLogs: [],
+  laundryOrders: [],
+  lostAndFound: [],
+  inventoryProducts: [],
+  inventoryPurchases: [],
+  vendors: [],
+  otaChannels: [],
+  travelAgents: [],
   expenses: [],
+  pettyCash: [],
+  cashBankAccounts: [],
+  vouchers: [],
+  ownerPayments: [],
+  reimbursements: [],
+  dailyClosings: [],
+  waterBottles: [],
   staff: [],
+  auditLogs: [],
+  notifications: [],
 };
 
 const PmsContext = createContext<PmsContextValue | undefined>(undefined);
@@ -196,66 +328,84 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       : null);
 
-  // 1. Advance Booking (supports With GST & No GST 0%)
   const createAdvanceBooking: PmsContextValue['createAdvanceBooking'] = async (input) => {
     if (!session) return { ok: false, error: 'Not authenticated' };
+    const selectedRooms =
+      input.roomNumbers && input.roomNumbers.length > 0
+        ? Array.from(new Set(input.roomNumbers.filter(Boolean)))
+        : [input.roomNumber];
     const nights = calcNights(input.checkInDate, input.checkOutDate);
-    const roomSub = Math.round(input.ratePerNight * nights * 100) / 100;
-    const disc = Math.max(0, Number(input.discount) || 0);
-    const taxable = Math.max(0, roomSub - disc);
-    const effRate = input.withGst ? (Number(input.gstRate) > 0 ? Number(input.gstRate) : 5) : 0;
-    const gstAmt = effRate > 0 ? Math.round(((taxable * effRate) / 100) * 100) / 100 : 0;
-    const totalPayable = Math.round((taxable + gstAmt) * 100) / 100;
-    const adv = Math.max(0, Number(input.advanceAmount) || 0);
-    const due = Math.max(0, Math.round((totalPayable - adv) * 100) / 100);
-    const matchedRoom = state.rooms.find((r) => r.number === input.roomNumber);
+    const defaultGst = Number(hotelProfile?.defaultGstRate) > 0 ? Number(hotelProfile?.defaultGstRate) : 5;
+    const effRate = input.withGst ? (Number(input.gstRate) > 0 ? Number(input.gstRate) : defaultGst) : 0;
     const todayStr = new Date().toISOString().slice(0, 10);
-    const bkgId = `BKG-${Date.now().toString().slice(-6)}`;
+    const totalRoomsCount = Math.max(1, selectedRooms.length);
+    const perRoomDiscount = Math.round(((Math.max(0, Number(input.discount) || 0)) / totalRoomsCount) * 100) / 100;
+    const perRoomAdvance = Math.round(((Math.max(0, Number(input.advanceAmount) || 0)) / totalRoomsCount) * 100) / 100;
 
-    const newBooking: Booking = {
-      id: bkgId,
-      bookingNo: bkgId,
-      hotelId: session.hotelId,
-      guestName: input.guestName.trim(),
-      customerName: input.guestName.trim(),
-      mobile: input.mobile.trim(),
-      email: input.email.trim(),
-      aadhaarNumber: input.aadhaarNumber.trim(),
-      address: input.address.trim(),
-      companyName: input.companyName?.trim() || '',
-      gstNumber: effRate > 0 ? input.gstNumber?.trim() || '' : '',
-      checkInDate: input.checkInDate,
-      checkOutDate: input.checkOutDate,
-      nights,
-      adults: Math.max(1, Number(input.adults) || 1),
-      children: 0,
-      roomNumber: input.roomNumber,
-      roomType: matchedRoom?.category || 'Deluxe',
-      bookingAmount: roomSub,
-      roomSubtotal: roomSub,
-      discountAmount: disc,
-      gstRate: effRate,
-      gstAmount: gstAmt,
-      isWithoutGst: effRate <= 0,
-      gstInvoice: effRate > 0,
-      taxRate: effRate,
-      taxAmount: gstAmt,
-      totalPayable,
-      advanceAmount: adv,
-      amountPaid: adv,
-      dueAmount: due,
-      paymentMethod: input.paymentMethod || 'UPI',
-      paymentStatus: due <= 0 && adv > 0 ? 'Fully Paid' : adv > 0 ? 'Partially Paid' : 'Unpaid',
-      bookingSource: input.bookingSource || 'Direct',
-      status: 'Confirmed',
-      isCheckedIn: false,
-      isCompleted: false,
-      bookingDate: todayStr,
-    };
+    const createdBookings: Booking[] = selectedRooms.map((rmNo, idx) => {
+      const matchedRoom = state.rooms.find((r) => r.number === rmNo);
+      const unitRate =
+        totalRoomsCount > 1 && matchedRoom?.rate
+          ? Number(matchedRoom.rate)
+          : Number(input.ratePerNight) || Number(matchedRoom?.rate || 2000);
+      const roomSub = Math.round(unitRate * nights * 100) / 100;
+      const taxable = Math.max(0, roomSub - perRoomDiscount);
+      const gstAmt = effRate > 0 ? Math.round(((taxable * effRate) / 100) * 100) / 100 : 0;
+      const totalPayable = Math.round((taxable + gstAmt) * 100) / 100;
+      const due = Math.max(0, Math.round((totalPayable - perRoomAdvance) * 100) / 100);
+      const bkgId = `BKG-${Date.now().toString().slice(-6)}${totalRoomsCount > 1 ? `-${idx + 1}` : ''}`;
 
-    const nextBookings = [newBooking, ...state.bookings];
+      return {
+        id: bkgId,
+        bookingNo: bkgId,
+        hotelId: session.hotelId,
+        guestName: input.guestName.trim(),
+        customerName: input.guestName.trim(),
+        mobile: input.mobile.trim(),
+        email: input.email.trim(),
+        aadhaarNumber: input.aadhaarNumber.trim(),
+        address: input.address.trim(),
+        companyName: input.companyName?.trim() || '',
+        gstNumber: effRate > 0 ? input.gstNumber?.trim() || '' : '',
+        checkInDate: input.checkInDate,
+        checkOutDate: input.checkOutDate,
+        nights,
+        adults: Math.max(1, Number(input.adults) || 1),
+        children: 0,
+        roomNumber: rmNo,
+        roomType: matchedRoom?.category || 'Deluxe',
+        bookingAmount: roomSub,
+        roomSubtotal: roomSub,
+        discountAmount: perRoomDiscount,
+        gstRate: effRate,
+        gstAmount: gstAmt,
+        isWithoutGst: effRate <= 0,
+        gstInvoice: effRate > 0,
+        taxRate: effRate,
+        taxAmount: gstAmt,
+        totalPayable,
+        advanceAmount: perRoomAdvance,
+        amountPaid: perRoomAdvance,
+        dueAmount: due,
+        paymentMethod: input.paymentMethod || 'UPI',
+        paymentStatus:
+          due <= 0 && perRoomAdvance > 0
+            ? 'Fully Paid'
+            : perRoomAdvance > 0
+            ? 'Partially Paid'
+            : 'Unpaid',
+        bookingSource: input.bookingSource || 'Direct',
+        status: 'Confirmed',
+        isCheckedIn: false,
+        isCompleted: false,
+        bookingDate: todayStr,
+        notes: totalRoomsCount > 1 ? `Bulk Booking (${selectedRooms.join(', ')})` : '',
+      };
+    });
+
+    const nextBookings = [...createdBookings, ...state.bookings];
     const nextRooms = state.rooms.map((rm) =>
-      rm.number === input.roomNumber && rm.status === 'Available' && input.checkInDate === todayStr
+      selectedRooms.includes(rm.number) && rm.status === 'Available' && input.checkInDate === todayStr
         ? { ...rm, status: 'Reserved' as RoomStatus }
         : rm
     );
@@ -267,30 +417,57 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       rooms: nextRooms,
     });
     setSyncing(false);
-    if (!res.ok) return { ok: false, error: res.error };
-    return { ok: true };
+    return res.ok ? { ok: true } : { ok: false, error: res.error };
   };
 
-  // 2. Walk-In or Advance Booking Check-In (supports With GST & No GST 0%)
   const performCheckIn: PmsContextValue['performCheckIn'] = async (input) => {
     if (!session) return { ok: false, error: 'Not authenticated' };
     const nights = calcNights(input.checkInDate, input.checkOutDate);
     const roomSub = Math.round(input.ratePerNight * nights * 100) / 100;
+    const earlyLateSub =
+      Math.max(0, Number(input.earlyCheckInCharge) || 0) +
+      Math.max(0, Number(input.lateCheckOutCharge) || 0) +
+      Math.max(0, Number(input.extraBedCharge) || 0);
     const disc = Math.max(0, Number(input.discount) || 0);
-    const taxable = Math.max(0, roomSub - disc);
-
-    // Check if an invoice already exists for linkedBookingId -> if so, lock GST mode on existing invoice!
+    const taxable = Math.max(0, roomSub + earlyLateSub - disc);
     const existingInv = input.linkedBookingId
       ? state.invoices.find((inv) => inv.bookingId === input.linkedBookingId && !inv.isSeparateInvoice)
       : undefined;
 
-    const effRate = input.withGst ? (Number(input.gstRate) > 0 ? Number(input.gstRate) : 5) : 0;
+    const defaultGst = Number(hotelProfile?.defaultGstRate) > 0 ? Number(hotelProfile?.defaultGstRate) : 5;
+    const effRate = input.withGst ? (Number(input.gstRate) > 0 ? Number(input.gstRate) : defaultGst) : 0;
     const gstAmt = effRate > 0 ? Math.round(((taxable * effRate) / 100) * 100) / 100 : 0;
     const totalPayable = Math.round((taxable + gstAmt) * 100) / 100;
     const adv = Math.max(0, Number(input.advanceAmount) || 0);
     const due = Math.max(0, Math.round((totalPayable - adv) * 100) / 100);
     const matchedRoom = state.rooms.find((r) => r.number === input.roomNumber);
     const checkInId = input.linkedBookingId || `CHK-${Date.now().toString().slice(-6)}`;
+
+    const extraList = [];
+    if (Number(input.earlyCheckInCharge) > 0) {
+      extraList.push({
+        id: `EXT-EARLY-${Date.now()}`,
+        category: 'Early Check-In',
+        description: `Early Check-In (${input.arrivalTime || ''})`,
+        amount: Number(input.earlyCheckInCharge),
+      });
+    }
+    if (Number(input.lateCheckOutCharge) > 0) {
+      extraList.push({
+        id: `EXT-LATE-${Date.now()}`,
+        category: 'Late Check-Out',
+        description: `Late Check-Out (${input.departureTime || ''})`,
+        amount: Number(input.lateCheckOutCharge),
+      });
+    }
+    if (Number(input.extraBedCharge) > 0) {
+      extraList.push({
+        id: `EXT-BED-${Date.now()}`,
+        category: 'Extra Bed',
+        description: 'Extra Bed Charge',
+        amount: Number(input.extraBedCharge),
+      });
+    }
 
     const newCheckin: GuestCheckIn = {
       id: checkInId,
@@ -299,25 +476,39 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       guestName: input.guestName.trim(),
       mobile: input.mobile.trim(),
       phone: input.mobile.trim(),
+      email: input.email?.trim() || '',
       aadhaarNumber: input.aadhaarNumber.trim(),
-      idType: 'Aadhaar Card',
+      idType: input.idType || 'Aadhaar Card',
       idNumber: input.aadhaarNumber.trim(),
       address: input.address.trim(),
-      nationality: 'Indian',
+      nationality: input.nationality || 'Indian',
+      comingFrom: input.comingFrom?.trim() || '',
+      goingTo: input.goingTo?.trim() || '',
+      purposeOfVisit: input.purposeOfVisit || 'Leisure',
+      mealPlan: input.mealPlan || 'EP',
       companyName: input.companyName?.trim() || '',
       gstNumber: effRate > 0 ? input.gstNumber?.trim() || '' : '',
       roomNumber: input.roomNumber,
       roomType: matchedRoom?.category || 'Deluxe',
       roomRate: input.ratePerNight,
       checkInDate: input.checkInDate,
+      arrivalTime: input.arrivalTime || '',
       checkOutDate: input.checkOutDate,
+      departureTime: input.departureTime || '',
+      earlyCheckInCharge: Number(input.earlyCheckInCharge) || 0,
+      lateCheckOutCharge: Number(input.lateCheckOutCharge) || 0,
+      extraBedCharge: Number(input.extraBedCharge) || 0,
       adults: Math.max(1, Number(input.adults) || 1),
-      children: 0,
+      children: Math.max(0, Number(input.children) || 0),
       advanceAmount: adv,
       gstRate: effRate,
       gstAmount: gstAmt,
       isWithoutGst: effRate <= 0,
-      extraCharges: [],
+      isCFormRequired: Boolean(input.isCFormRequired),
+      cFormData: input.isCFormRequired ? input.cFormData : undefined,
+      guestSignature: input.guestSignature || '',
+      checkedInBy: session.username,
+      extraCharges: extraList,
       status: 'Active',
     };
 
@@ -391,10 +582,7 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       nextBookings = [walkinBooking, ...nextBookings];
     }
 
-    const nextCheckins = [
-      newCheckin,
-      ...state.checkins.filter((c) => c.id !== checkInId),
-    ];
+    const nextCheckins = [newCheckin, ...state.checkins.filter((c) => c.id !== checkInId)];
     const nextRooms = state.rooms.map((rm) =>
       rm.number === input.roomNumber ? { ...rm, status: 'Occupied' as RoomStatus } : rm
     );
@@ -413,11 +601,9 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       rooms: nextRooms,
     });
     setSyncing(false);
-    if (!res.ok) return { ok: false, error: res.error };
-    return { ok: true };
+    return res.ok ? { ok: true } : { ok: false, error: res.error };
   };
 
-  // 3. Checkout Clearance & Official Invoice Generation (preserves locked GST if invoice already exists!)
   const performCheckout: PmsContextValue['performCheckout'] = async (input) => {
     if (!session) return { ok: false, error: 'Not authenticated' };
     const bkg = state.bookings.find((b) => b.id === input.bookingOrCheckInId);
@@ -438,7 +624,14 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const existingPosTotal = state.posOrders
       .filter((o) => o.roomNumber === roomNumber && o.paymentStatus !== 'Paid')
       .reduce((s, o) => s + (Number(o.totalAmount) || 0), 0);
-    const addedExtra = Math.max(0, Number(input.extraChargeAmt) || 0);
+    const checkInExtraTotal = (chk?.extraCharges || []).reduce(
+      (s, e) => s + (Number(e.amount) || 0),
+      0
+    );
+    const addedExtra =
+      Math.max(0, Number(input.extraChargeAmt) || 0) +
+      Math.max(0, Number(input.lateCheckOutCharge) || 0) +
+      checkInExtraTotal;
     const foodAndExtra = existingPosTotal + addedExtra;
     const disc = Math.max(0, Number(input.discount) || 0);
     const taxable = Math.max(0, roomCharges + foodAndExtra - disc);
@@ -471,9 +664,10 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const pending = Math.max(0, Math.round((finalAmt - totalPaid) * 100) / 100);
     const todayStr = new Date().toISOString().slice(0, 10);
     const seqNo = String(state.invoices.length + 1).padStart(4, '0');
-    const invId = existingPrimaryInv?.id || `INV-${Date.now().toString().slice(-6)}`;
+    const invPrefix = (hotelProfile?.invoicePrefix || 'INV').trim();
+    const invId = existingPrimaryInv?.id || `${invPrefix}-${Date.now().toString().slice(-6)}`;
     const invNumber =
-      existingPrimaryInv?.invoiceNumber || `INV-${todayStr.replace(/-/g, '')}-${seqNo}`;
+      existingPrimaryInv?.invoiceNumber || `${invPrefix}-${todayStr.replace(/-/g, '')}-${seqNo}`;
 
     const builtInvoice: Invoice = {
       id: invId,
@@ -556,7 +750,18 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       notes: `Checkout cleaning after ${guestName}`,
     };
 
+    const newNotif: AppNotificationItem = {
+      id: `NTF-${Date.now().toString().slice(-6)}`,
+      hotelId: session.hotelId,
+      title: `Room ${roomNumber} Checked Out — Dirty Alert`,
+      message: `Housekeeping Alert: Room ${roomNumber} (${guestName}) checked out and is now marked DIRTY for immediate turnaround cleaning.`,
+      type: 'housekeeping',
+      read: false,
+      createdAt: new Date().toISOString(),
+    };
+
     const nextCleaningLogs = [newHkTask, ...state.cleaningLogs];
+    const nextNotifications = [newNotif, ...state.notifications];
     const nextInvoices = existingPrimaryInv
       ? state.invoices.map((i) => (i.id === existingPrimaryInv.id ? builtInvoice : i))
       : [builtInvoice, ...state.invoices];
@@ -567,6 +772,7 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       checkins: nextCheckins,
       rooms: nextRooms,
       cleaningLogs: nextCleaningLogs,
+      notifications: nextNotifications,
       invoices: nextInvoices,
     }));
 
@@ -576,14 +782,13 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       checkins: nextCheckins,
       rooms: nextRooms,
       cleaningLogs: nextCleaningLogs,
+      notifications: nextNotifications,
       invoices: nextInvoices,
     });
     setSyncing(false);
-    if (!res.ok) return { ok: false, error: res.error };
-    return { ok: true, invoice: builtInvoice };
+    return res.ok ? { ok: true, invoice: builtInvoice } : { ok: false, error: res.error };
   };
 
-  // 4. Separate Invoice Generator (NEVER edits GST on an existing invoice — creates a brand-new invoice!)
   const generateSeparateOrNewInvoice: PmsContextValue['generateSeparateOrNewInvoice'] = async (
     input
   ) => {
@@ -618,7 +823,6 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const paid = Number(bkg.amountPaid ?? bkg.advanceAmount ?? 0);
     const pending = Math.max(0, Math.round((finalAmt - paid) * 100) / 100);
 
-    // Try server /api/invoices/generate first so Node/PHP sequential numbering & validation run
     const apiGen = await generateLiveInvoiceApi(session, {
       id: newInvId,
       invoiceNumber: newInvNumber,
@@ -645,51 +849,52 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       overrideInvoiceType: effRate > 0 ? 'Tax Invoice' : 'Bill of Supply',
     });
 
-    const finalInvoice: Invoice = apiGen.ok && apiGen.invoice
-      ? {
-          ...apiGen.invoice,
-          isWithoutGst: effRate <= 0,
-          isSeparateInvoice: isSeparate,
-          gstRate: effRate,
-        }
-      : {
-          id: newInvId,
-          invoiceNumber: newInvNumber,
-          hotelId: session.hotelId,
-          bookingId: bkg.id,
-          guestName: bkg.guestName,
-          guestMobile: bkg.mobile,
-          mobile: bkg.mobile,
-          companyName: bkg.companyName,
-          guestGstNumber: effRate > 0 ? bkg.gstNumber : '',
-          gstNumber: effRate > 0 ? bkg.gstNumber : '',
-          roomNumber: bkg.roomNumber,
-          checkInDate: bkg.checkInDate,
-          checkOutDate: bkg.checkOutDate,
-          roomCharges,
-          foodCharges: posCharges,
-          waterCharges: 0,
-          otherCharges: 0,
-          subtotal: roomCharges + posCharges,
-          discount: disc,
-          gstRate: effRate,
-          gst: gstAmt,
-          cgst,
-          sgst,
-          isWithoutGst: effRate <= 0,
-          isSeparateInvoice: isSeparate,
-          parentInvoiceId: existingForBooking[0]?.id,
-          invoiceType: effRate > 0 ? 'Tax Invoice' : 'Bill of Supply',
-          finalAmount: finalAmt,
-          advancePaid: paid,
-          pendingAmount: pending,
-          isPaid: pending <= 0,
-          paymentStatus: pending <= 0 ? 'Paid' : paid > 0 ? 'Partially Paid' : 'Unpaid',
-          invoiceStatus: 'Generated',
-          paymentMethod: bkg.paymentMethod || 'UPI',
-          dateCreated: todayStr,
-          date: todayStr,
-        };
+    const finalInvoice: Invoice =
+      apiGen.ok && apiGen.invoice
+        ? {
+            ...apiGen.invoice,
+            isWithoutGst: effRate <= 0,
+            isSeparateInvoice: isSeparate,
+            gstRate: effRate,
+          }
+        : {
+            id: newInvId,
+            invoiceNumber: newInvNumber,
+            hotelId: session.hotelId,
+            bookingId: bkg.id,
+            guestName: bkg.guestName,
+            guestMobile: bkg.mobile,
+            mobile: bkg.mobile,
+            companyName: bkg.companyName,
+            guestGstNumber: effRate > 0 ? bkg.gstNumber : '',
+            gstNumber: effRate > 0 ? bkg.gstNumber : '',
+            roomNumber: bkg.roomNumber,
+            checkInDate: bkg.checkInDate,
+            checkOutDate: bkg.checkOutDate,
+            roomCharges,
+            foodCharges: posCharges,
+            waterCharges: 0,
+            otherCharges: 0,
+            subtotal: roomCharges + posCharges,
+            discount: disc,
+            gstRate: effRate,
+            gst: gstAmt,
+            cgst,
+            sgst,
+            isWithoutGst: effRate <= 0,
+            isSeparateInvoice: isSeparate,
+            parentInvoiceId: existingForBooking[0]?.id,
+            invoiceType: effRate > 0 ? 'Tax Invoice' : 'Bill of Supply',
+            finalAmount: finalAmt,
+            advancePaid: paid,
+            pendingAmount: pending,
+            isPaid: pending <= 0,
+            paymentStatus: pending <= 0 ? 'Paid' : paid > 0 ? 'Partially Paid' : 'Unpaid',
+            invoiceStatus: 'Generated',
+            paymentMethod: bkg.paymentMethod || 'UPI',
+            dateCreated: todayStr,
+            date: todayStr,
+          };
 
     const nextInvoices = [
       finalInvoice,
@@ -715,6 +920,25 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
         : r
     );
+    setState((prev) => ({ ...prev, rooms: nextRooms }));
+    await syncLiveHotelDataApi(session, { rooms: nextRooms });
+  };
+
+  const addRoomEntity: PmsContextValue['addRoomEntity'] = async (input) => {
+    if (!session) return;
+    const newRoom: Room = {
+      id: `RM-${Date.now().toString().slice(-6)}`,
+      hotelId: session.hotelId,
+      number: input.number.trim(),
+      category: input.category.trim() || 'Deluxe',
+      floor: input.floor.trim() || '1st Floor',
+      bedType: input.bedType.trim() || 'King Bed',
+      rate: Number(input.rate) || 2000,
+      status: 'Available',
+      maxOccupancy: 3,
+      amenities: ['AC', 'Wi-Fi', 'TV'],
+    };
+    const nextRooms = [...state.rooms, newRoom];
     setState((prev) => ({ ...prev, rooms: nextRooms }));
     await syncLiveHotelDataApi(session, { rooms: nextRooms });
   };
@@ -754,15 +978,29 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return res.ok ? { ok: true } : { ok: false, error: res.error };
   };
 
+  const addPosMenuItem: PmsContextValue['addPosMenuItem'] = async (input) => {
+    if (!session) return;
+    const item: PosItem = {
+      id: `ITEM-${Date.now().toString().slice(-6)}`,
+      hotelId: session.hotelId,
+      name: input.name.trim(),
+      category: input.category.trim() || 'Main Course',
+      price: Number(input.price) || 150,
+      isVeg: true,
+      isAvailable: true,
+    };
+    const nextItems = [...state.posItems, item];
+    setState((prev) => ({ ...prev, posItems: nextItems }));
+    await syncLiveHotelDataApi(session, { posItems: nextItems });
+  };
+
   const markHousekeepingTaskStatus: PmsContextValue['markHousekeepingTaskStatus'] = async (
     logId,
     status,
     roomNumber
   ) => {
     if (!session) return;
-    const nextLogs = state.cleaningLogs.map((l) =>
-      l.id === logId ? { ...l, status } : l
-    );
+    const nextLogs = state.cleaningLogs.map((l) => (l.id === logId ? { ...l, status } : l));
     const nextRooms =
       status === 'Cleaned' || status === 'Inspected'
         ? state.rooms.map((r) =>
@@ -773,6 +1011,154 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         : state.rooms;
     setState((prev) => ({ ...prev, cleaningLogs: nextLogs, rooms: nextRooms }));
     await syncLiveHotelDataApi(session, { cleaningLogs: nextLogs, rooms: nextRooms });
+  };
+
+  const addHousekeepingTask: PmsContextValue['addHousekeepingTask'] = async (input) => {
+    if (!session) return;
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const task: HousekeepingLog = {
+      id: `HK-${Date.now().toString().slice(-6)}`,
+      hotelId: session.hotelId,
+      roomNumber: input.roomNumber.trim(),
+      date: todayStr,
+      assignedStaff: input.assignedStaff.trim() || 'Housekeeping Team',
+      cleaningType: input.cleaningType.trim() || 'Deep Cleaning',
+      status: 'Pending',
+    };
+    const nextLogs = [task, ...state.cleaningLogs];
+    setState((prev) => ({ ...prev, cleaningLogs: nextLogs }));
+    await syncLiveHotelDataApi(session, { cleaningLogs: nextLogs });
+  };
+
+  const addLaundryOrder: PmsContextValue['addLaundryOrder'] = async (input) => {
+    if (!session) return;
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const order: LaundryOrder = {
+      id: `LND-${Date.now().toString().slice(-6)}`,
+      hotelId: session.hotelId,
+      roomNumber: input.roomNumber.trim(),
+      guestName: input.guestName.trim() || 'Room Guest',
+      itemsSummary: input.itemsSummary.trim(),
+      amount: Number(input.amount) || 0,
+      status: 'In Wash',
+      date: todayStr,
+    };
+    const next = [order, ...state.laundryOrders];
+    setState((prev) => ({ ...prev, laundryOrders: next }));
+    await syncLiveHotelDataApi(session, { laundryOrders: next });
+  };
+
+  const addLostFoundItem: PmsContextValue['addLostFoundItem'] = async (input) => {
+    if (!session) return;
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const rec: LostFoundItem = {
+      id: `LF-${Date.now().toString().slice(-6)}`,
+      hotelId: session.hotelId,
+      itemName: input.itemName.trim(),
+      roomNumber: input.roomNumber.trim(),
+      foundBy: input.foundBy.trim() || session.username,
+      status: 'Stored at Desk',
+      date: todayStr,
+    };
+    const next = [rec, ...state.lostAndFound];
+    setState((prev) => ({ ...prev, lostAndFound: next }));
+    await syncLiveHotelDataApi(session, { lostAndFound: next });
+  };
+
+  const addInventoryProduct: PmsContextValue['addInventoryProduct'] = async (input) => {
+    if (!session) return;
+    const prod: InventoryProduct = {
+      id: `INV-PRD-${Date.now().toString().slice(-6)}`,
+      hotelId: session.hotelId,
+      name: input.name.trim(),
+      sku: `SKU-${Date.now().toString().slice(-4)}`,
+      category: input.category.trim() || 'Amenities',
+      unit: input.unit.trim() || 'pcs',
+      currentStock: Number(input.currentStock) || 0,
+      minStockLevel: Number(input.minStockLevel) || 5,
+      unitPrice: Number(input.unitPrice) || 0,
+    };
+    const next = [prod, ...state.inventoryProducts];
+    setState((prev) => ({ ...prev, inventoryProducts: next }));
+    await syncLiveHotelDataApi(session, { inventoryProducts: next });
+  };
+
+  const adjustInventoryStock: PmsContextValue['adjustInventoryStock'] = async (
+    productId,
+    delta
+  ) => {
+    if (!session) return;
+    const next = state.inventoryProducts.map((p) =>
+      p.id === productId
+        ? { ...p, currentStock: Math.max(0, (Number(p.currentStock) || 0) + delta) }
+        : p
+    );
+    setState((prev) => ({ ...prev, inventoryProducts: next }));
+    await syncLiveHotelDataApi(session, { inventoryProducts: next });
+  };
+
+  const addInventoryPurchase: PmsContextValue['addInventoryPurchase'] = async (input) => {
+    if (!session) return;
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const po: InventoryPurchase = {
+      id: `PO-${Date.now().toString().slice(-6)}`,
+      poNumber: `PO-${Date.now().toString().slice(-4)}`,
+      hotelId: session.hotelId,
+      supplierName: input.supplierName.trim(),
+      itemName: input.itemName.trim(),
+      quantity: Number(input.quantity) || 1,
+      totalAmount: Number(input.totalAmount) || 0,
+      status: 'Received',
+      date: todayStr,
+    };
+    const next = [po, ...state.inventoryPurchases];
+    setState((prev) => ({ ...prev, inventoryPurchases: next }));
+    await syncLiveHotelDataApi(session, { inventoryPurchases: next });
+  };
+
+  const addVendorRecord: PmsContextValue['addVendorRecord'] = async (input) => {
+    if (!session) return;
+    const v: SupplierRecord = {
+      id: `VND-${Date.now().toString().slice(-6)}`,
+      hotelId: session.hotelId,
+      name: input.name.trim(),
+      phone: input.phone.trim(),
+      category: input.category.trim() || 'General Supplies',
+    };
+    const next = [v, ...state.vendors];
+    setState((prev) => ({ ...prev, vendors: next }));
+    await syncLiveHotelDataApi(session, { vendors: next });
+  };
+
+  const addTravelAgent: PmsContextValue['addTravelAgent'] = async (input) => {
+    if (!session) return;
+    const agent: TravelAgent = {
+      id: `AGT-${Date.now().toString().slice(-6)}`,
+      hotelId: session.hotelId,
+      name: input.name.trim(),
+      agencyName: input.agencyName.trim() || input.name.trim(),
+      phone: input.phone.trim(),
+      commissionRate: Number(input.commissionRate) || 10,
+      status: 'Active',
+    };
+    const next = [agent, ...state.travelAgents];
+    setState((prev) => ({ ...prev, travelAgents: next }));
+    await syncLiveHotelDataApi(session, { travelAgents: next });
+  };
+
+  const upsertOtaChannel: PmsContextValue['upsertOtaChannel'] = async (input) => {
+    if (!session) return;
+    const ch: OtaChannel = {
+      id: `OTA-${Date.now().toString().slice(-6)}`,
+      hotelId: session.hotelId,
+      name: input.name.trim(),
+      commissionPct: Number(input.commissionPct) || 15,
+      status: input.status || 'Connected',
+      lastSyncedAt: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+    };
+    const next = [ch, ...state.otaChannels.filter((c) => c.name !== ch.name)];
+    setState((prev) => ({ ...prev, otaChannels: next }));
+    await syncLiveHotelDataApi(session, { otaChannels: next });
   };
 
   const addExpenseEntry: PmsContextValue['addExpenseEntry'] = async (input) => {
@@ -797,6 +1183,127 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     await syncLiveHotelDataApi(session, { expenses: nextExpenses });
   };
 
+  const addPettyCashEntry: PmsContextValue['addPettyCashEntry'] = async (input) => {
+    if (!session) return;
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const entry: PettyCashRecord = {
+      id: `PC-${Date.now().toString().slice(-6)}`,
+      hotelId: session.hotelId,
+      type: input.type,
+      description: input.description.trim(),
+      amount: Number(input.amount) || 0,
+      date: todayStr,
+      handledBy: session.username,
+    };
+    const next = [entry, ...state.pettyCash];
+    setState((prev) => ({ ...prev, pettyCash: next }));
+    await syncLiveHotelDataApi(session, { pettyCash: next });
+  };
+
+  const addFinanceVoucher: PmsContextValue['addFinanceVoucher'] = async (input) => {
+    if (!session) return;
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const v: FinanceVoucher = {
+      id: `VCH-${Date.now().toString().slice(-6)}`,
+      voucherNo: `VCH-${Date.now().toString().slice(-4)}`,
+      hotelId: session.hotelId,
+      voucherType: input.voucherType,
+      partyName: input.partyName.trim(),
+      amount: Number(input.amount) || 0,
+      paymentMode: input.paymentMode || 'UPI',
+      narration: input.narration.trim(),
+      date: todayStr,
+    };
+    const next = [v, ...state.vouchers];
+    setState((prev) => ({ ...prev, vouchers: next }));
+    await syncLiveHotelDataApi(session, { vouchers: next });
+  };
+
+  const addDailyClosing: PmsContextValue['addDailyClosing'] = async (input) => {
+    if (!session) return;
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const dc: DailyClosing = {
+      id: `CLS-${Date.now().toString().slice(-6)}`,
+      hotelId: session.hotelId,
+      date: todayStr,
+      shift: input.shift || 'Day Shift',
+      cashCollected: Number(input.cashCollected) || 0,
+      upiCollected: Number(input.upiCollected) || 0,
+      closedBy: session.username,
+      notes: input.notes.trim(),
+    };
+    const next = [dc, ...state.dailyClosings];
+    setState((prev) => ({ ...prev, dailyClosings: next }));
+    await syncLiveHotelDataApi(session, { dailyClosings: next });
+  };
+
+  const addWaterBottleLog: PmsContextValue['addWaterBottleLog'] = async (input) => {
+    if (!session) return;
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const wb: WaterBottleLog = {
+      id: `WB-${Date.now().toString().slice(-6)}`,
+      hotelId: session.hotelId,
+      roomNumber: input.roomNumber.trim(),
+      complimentaryQty: Number(input.complimentaryQty) || 0,
+      chargeableQty: Number(input.chargeableQty) || 0,
+      amount: (Number(input.chargeableQty) || 0) * 20,
+      date: todayStr,
+    };
+    const next = [wb, ...state.waterBottles];
+    setState((prev) => ({ ...prev, waterBottles: next }));
+    await syncLiveHotelDataApi(session, { waterBottles: next });
+  };
+
+  const addStaffMember: PmsContextValue['addStaffMember'] = async (input) => {
+    if (!session) return;
+    const st: StaffMember = {
+      id: `STF-${Date.now().toString().slice(-6)}`,
+      hotelId: session.hotelId,
+      name: input.name.trim(),
+      mobile: input.mobile.trim(),
+      department: input.department.trim() || 'Reception',
+      designation: input.designation.trim() || 'Receptionist',
+      role: input.department.trim() || 'Reception',
+      username: input.username.trim(),
+      password: input.password.trim(),
+      plainPassword: input.password.trim(),
+      salary: Number(input.salary) || 15000,
+      shift: 'Morning',
+      status: 'Active',
+    };
+    const next = [st, ...state.staff];
+    setState((prev) => ({ ...prev, staff: next }));
+    await syncLiveHotelDataApi(session, { staff: next });
+  };
+
+  const toggleStaffStatus: PmsContextValue['toggleStaffStatus'] = async (staffId) => {
+    if (!session) return;
+    const next = state.staff.map((s) =>
+      s.id === staffId ? { ...s, status: s.status === 'Active' ? 'Inactive' : 'Active' } : s
+    );
+    setState((prev) => ({ ...prev, staff: next }));
+    await syncLiveHotelDataApi(session, { staff: next });
+  };
+
+  const updateHotelProfileSettings: PmsContextValue['updateHotelProfileSettings'] = async (
+    patch
+  ) => {
+    if (!session) return;
+    const exists = state.hotels.some((h) => h.id === session.hotelId);
+    const nextHotels = exists
+      ? state.hotels.map((h) => (h.id === session.hotelId ? { ...h, ...patch } : h))
+      : [{ ...(hotelProfile || { id: session.hotelId, name: 'DirectStay Property' }), ...patch }, ...state.hotels];
+    setState((prev) => ({ ...prev, hotels: nextHotels }));
+    await syncLiveHotelDataApi(session, { hotels: nextHotels });
+  };
+
+  const markAllNotificationsRead: PmsContextValue['markAllNotificationsRead'] = async () => {
+    if (!session) return;
+    const next = state.notifications.map((n) => ({ ...n, read: true }));
+    setState((prev) => ({ ...prev, notifications: next }));
+    await syncLiveHotelDataApi(session, { notifications: next });
+  };
+
   return (
     <PmsContext.Provider
       value={{
@@ -815,9 +1322,28 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         performCheckout,
         generateSeparateOrNewInvoice,
         updateRoomStatusOrRate,
+        addRoomEntity,
         createPosOrder,
+        addPosMenuItem,
         markHousekeepingTaskStatus,
+        addHousekeepingTask,
+        addLaundryOrder,
+        addLostFoundItem,
+        addInventoryProduct,
+        adjustInventoryStock,
+        addInventoryPurchase,
+        addVendorRecord,
+        addTravelAgent,
+        upsertOtaChannel,
         addExpenseEntry,
+        addPettyCashEntry,
+        addFinanceVoucher,
+        addDailyClosing,
+        addWaterBottleLog,
+        addStaffMember,
+        toggleStaffStatus,
+        updateHotelProfileSettings,
+        markAllNotificationsRead,
       }}
     >
       {children}
@@ -827,6 +1353,6 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
 export function usePms(): PmsContextValue {
   const ctx = useContext(PmsContext);
-  if (!ctx) throw new Error('usePms must be used inside PmsProvider');
+  if (!ctx) throw new Error('usePms must be used within PmsProvider');
   return ctx;
 }

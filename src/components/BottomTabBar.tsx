@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   LayoutDashboard,
   CalendarCheck2,
@@ -7,15 +8,18 @@ import {
   ReceiptText,
   Grid,
 } from 'lucide-react-native';
+import { AdminModuleId } from '../types/pms';
 import { COLORS } from '../theme/colors';
 
-export type AdminBottomTab = 'dashboard' | 'frontDesk' | 'rooms' | 'invoices' | 'operations';
+export type AdminBottomTab = 'dashboard' | 'frontDesk' | 'rooms' | 'invoice' | 'allModules';
 
 interface BottomTabBarProps {
-  activeTab: AdminBottomTab;
-  onSelectTab: (tab: AdminBottomTab) => void;
+  activeModule: AdminModuleId;
+  onSelectModule: (mod: AdminModuleId) => void;
+  onOpenDrawer: () => void;
   dirtyCount?: number;
   unpaidCount?: number;
+  alertCount?: number;
 }
 
 const TABS: Array<{
@@ -23,37 +27,50 @@ const TABS: Array<{
   label: string;
   Icon: any;
 }> = [
-  { key: 'dashboard', label: 'Dashboard', Icon: LayoutDashboard },
+  { key: 'dashboard', label: 'Overview', Icon: LayoutDashboard },
   { key: 'frontDesk', label: 'Front Desk', Icon: CalendarCheck2 },
   { key: 'rooms', label: 'Rooms', Icon: BedDouble },
-  { key: 'invoices', label: 'Invoices', Icon: ReceiptText },
-  { key: 'operations', label: 'Operations', Icon: Grid },
+  { key: 'invoice', label: 'Invoices', Icon: ReceiptText },
+  { key: 'allModules', label: 'All Modules', Icon: Grid },
 ];
 
 export const BottomTabBar: React.FC<BottomTabBarProps> = ({
-  activeTab,
-  onSelectTab,
+  activeModule,
+  onSelectModule,
+  onOpenDrawer,
   dirtyCount = 0,
   unpaidCount = 0,
+  alertCount = 0,
 }) => {
+  const insets = useSafeAreaInsets();
+  const isSecondaryModule = !['dashboard', 'frontDesk', 'rooms', 'invoice'].includes(activeModule);
+
   return (
-    <View style={styles.wrapper}>
+    <View style={[styles.wrapper, { paddingBottom: Math.max(insets.bottom, 8) }]}>
       <View style={styles.goldTopHairline} />
       <View style={styles.row}>
         {TABS.map(({ key, label, Icon }) => {
-          const isActive = activeTab === key;
+          const isActive = key === 'allModules' ? isSecondaryModule : activeModule === key;
           const badge =
             key === 'rooms' && dirtyCount > 0
               ? dirtyCount
-              : key === 'invoices' && unpaidCount > 0
+              : key === 'invoice' && unpaidCount > 0
               ? unpaidCount
+              : key === 'allModules' && alertCount > 0
+              ? alertCount
               : 0;
 
           return (
             <TouchableOpacity
               key={key}
               activeOpacity={0.8}
-              onPress={() => onSelectTab(key)}
+              onPress={() => {
+                if (key === 'allModules') {
+                  onOpenDrawer();
+                } else {
+                  onSelectModule(key);
+                }
+              }}
               style={styles.tabBtn}
             >
               {isActive && <View style={styles.activePillIndicator} />}
@@ -69,7 +86,14 @@ export const BottomTabBar: React.FC<BottomTabBarProps> = ({
                   </View>
                 )}
               </View>
-              <Text style={[styles.label, isActive && styles.labelActive]}>{label}</Text>
+              <Text
+                style={[styles.label, isActive && styles.labelActive]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.85}
+              >
+                {label}
+              </Text>
             </TouchableOpacity>
           );
         })}
@@ -81,7 +105,6 @@ export const BottomTabBar: React.FC<BottomTabBarProps> = ({
 const styles = StyleSheet.create({
   wrapper: {
     backgroundColor: COLORS.espresso,
-    paddingBottom: Platform.OS === 'ios' ? 20 : 8,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: -4 },
     shadowOpacity: 0.2,
@@ -98,12 +121,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-around',
     paddingTop: 8,
+    paddingHorizontal: 4,
   },
   tabBtn: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 4,
+    paddingHorizontal: 2,
     position: 'relative',
   },
   activePillIndicator: {

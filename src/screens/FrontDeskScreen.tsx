@@ -9,16 +9,32 @@ import {
   Alert,
   Modal,
 } from 'react-native';
-import { CalendarPlus, LogIn, LogOut, Lock, CheckCircle2 } from 'lucide-react-native';
+import {
+  CalendarPlus,
+  LogIn,
+  LogOut,
+  Lock,
+  CheckSquare,
+  Square,
+  Globe,
+  ClipboardList,
+} from 'lucide-react-native';
 import { usePms } from '../context/PmsContext';
 import { COLORS } from '../theme/colors';
 import { Booking } from '../types/pms';
+import { SubTabStrip } from '../components/SubTabStrip';
+import { DateFilterBar, matchesQuickDateFilter, QuickDateFilter } from '../components/DateFilterBar';
 
-type FrontSubMode = 'advance' | 'checkin' | 'inhouse';
+type FrontSubMode = 'advance' | 'reservations' | 'checkin' | 'inhouse' | 'cform';
 
 export const FrontDeskScreen: React.FC = () => {
-  const { state, createAdvanceBooking, performCheckIn, performCheckout } = usePms();
+  const { state, hotelProfile, createAdvanceBooking, performCheckIn, performCheckout } = usePms();
   const [subMode, setSubMode] = useState<FrontSubMode>('advance');
+  const [dateFilter, setDateFilter] = useState<QuickDateFilter>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const defaultGst =
+    Number(hotelProfile?.defaultGstRate) > 0 ? Number(hotelProfile?.defaultGstRate) : 5;
 
   const todayStr = new Date().toISOString().slice(0, 10);
   const tomorrowDate = new Date();
@@ -30,33 +46,51 @@ export const FrontDeskScreen: React.FC = () => {
   );
   const firstRoom = availableRooms[0] || state.rooms[0];
 
-  // Shared Booking / Check-In Form State
+  // Shared Booking / Check-In Form State (NO Signature section — logged-in user & check-in date/time auto-captured in DB!)
   const [linkedBookingId, setLinkedBookingId] = useState<string>('');
   const [guestName, setGuestName] = useState('');
   const [mobile, setMobile] = useState('');
   const [email, setEmail] = useState('');
+  const [idType, setIdType] = useState('Aadhaar Card');
   const [aadhaar, setAadhaar] = useState('');
   const [address, setAddress] = useState('');
+  const [nationality, setNationality] = useState('Indian');
+  const [comingFrom, setComingFrom] = useState('');
+  const [goingTo, setGoingTo] = useState('');
+  const [purposeOfVisit, setPurposeOfVisit] = useState('Leisure');
+  const [mealPlan, setMealPlan] = useState('EP');
   const [companyName, setCompanyName] = useState('');
   const [gstNumber, setGstNumber] = useState('');
+
+  // Single Room + Bulk Multi-Room (3-4+ rooms in one Advance Booking)
   const [roomNumber, setRoomNumber] = useState(firstRoom?.number || '101');
+  const [bulkMode, setBulkMode] = useState(false);
+  const [selectedBulkRooms, setSelectedBulkRooms] = useState<string[]>(
+    firstRoom?.number ? [firstRoom.number] : []
+  );
+
   const [checkInDate, setCheckInDate] = useState(todayStr);
   const [checkOutDate, setCheckOutDate] = useState(tomorrowStr);
   const [adults, setAdults] = useState('2');
   const [ratePerNight, setRatePerNight] = useState(String(firstRoom?.rate || 2000));
   const [discount, setDiscount] = useState('0');
   const [withGst, setWithGst] = useState<boolean>(true);
-  const [gstRate, setGstRate] = useState<number>(5);
   const [advanceAmt, setAdvanceAmt] = useState('0');
   const [paymentMethod, setPaymentMethod] = useState('UPI');
   const [submitting, setSubmitting] = useState(false);
+
+  // Foreign Guest Form-C (Optional toggle for foreign nationals)
+  const [isCFormRequired, setIsCFormRequired] = useState(false);
+  const [passportNo, setPassportNo] = useState('');
+  const [passportCountry, setPassportCountry] = useState('');
+  const [visaNo, setVisaNo] = useState('');
+  const [portOfArrival, setPortOfArrival] = useState('New Delhi Airport');
 
   // Checkout Modal State
   const [checkoutTarget, setCheckoutTarget] = useState<Booking | null>(null);
   const [coExtraAmt, setCoExtraAmt] = useState('0');
   const [coDiscount, setCoDiscount] = useState('0');
   const [coWithGst, setCoWithGst] = useState(true);
-  const [coGstRate, setCoGstRate] = useState(5);
   const [coCollectedNow, setCoCollectedNow] = useState('0');
   const [coPayMethod, setCoPayMethod] = useState('UPI');
 
@@ -66,12 +100,34 @@ export const FrontDeskScreen: React.FC = () => {
     const diff = Math.round((d2.getTime() - d1.getTime()) / 86400000);
     return Number.isFinite(diff) && diff > 0 ? diff : 1;
   })();
-  const roomSub = (Number(ratePerNight) || 0) * nights;
+
+  const activeRoomsForCalc =
+    subMode === 'advance' && bulkMode && selectedBulkRooms.length > 0
+      ? selectedBulkRooms
+      : [roomNumber];
+
+  const roomSub =
+    activeRoomsForCalc.length > 1
+      ? activeRoomsForCalc.reduce((sum, rmNo) => {
+          const rm = state.rooms.find((r) => r.number === rmNo);
+          return sum + (Number(rm?.rate || ratePerNight || 2000) * nights);
+        }, 0)
+      : (Number(ratePerNight) || 0) * nights;
+
   const taxable = Math.max(0, roomSub - (Number(discount) || 0));
-  const effGst = withGst ? gstRate : 0;
+  const effGst = withGst ? defaultGst : 0;
   const taxAmt = effGst > 0 ? Math.round(((taxable * effGst) / 100) * 100) / 100 : 0;
   const grandTotal = Math.round((taxable + taxAmt) * 100) / 100;
   const netDue = Math.max(0, Math.round((grandTotal - (Number(advanceAmt) || 0)) * 100) / 100);
+
+  const toggleBulkRoom = (rmNo: string) => {
+    setSelectedBulkRooms((prev) => {
+      if (prev.includes(rmNo)) {
+        return prev.length > 1 ? prev.filter((x) => x !== rmNo) : prev;
+      }
+      return [...prev, rmNo];
+    });
+  };
 
   const loadAdvanceBookingIntoCheckIn = (b: Booking) => {
     setLinkedBookingId(b.id);
@@ -91,13 +147,11 @@ export const FrontDeskScreen: React.FC = () => {
     setRatePerNight(String(Math.round(perNight) || 2000));
     setDiscount(String(b.discountAmount || 0));
 
-    // Accurately preserve No GST (0%) vs With GST from saved Advance Booking!
     const savedNoGst =
       b.isWithoutGst === true ||
       b.gstInvoice === false ||
       (b.gstRate !== undefined && Number(b.gstRate) <= 0);
     setWithGst(!savedNoGst);
-    setGstRate(savedNoGst ? 5 : Number(b.gstRate || b.taxRate || 5));
     setAdvanceAmt(String(b.advanceAmount ?? b.amountPaid ?? 0));
     setPaymentMethod(b.paymentMethod || 'UPI');
     setSubMode('checkin');
@@ -110,10 +164,15 @@ export const FrontDeskScreen: React.FC = () => {
     setEmail('');
     setAadhaar('');
     setAddress('');
+    setComingFrom('');
+    setGoingTo('');
     setCompanyName('');
     setGstNumber('');
     setAdvanceAmt('0');
     setDiscount('0');
+    setIsCFormRequired(false);
+    setPassportNo('');
+    setVisaNo('');
   };
 
   const handleSaveAdvanceBooking = async () => {
@@ -121,6 +180,7 @@ export const FrontDeskScreen: React.FC = () => {
       Alert.alert('Validation', 'Please enter guest name and a valid 10-digit mobile number.');
       return;
     }
+    const targetRooms = bulkMode && selectedBulkRooms.length > 0 ? selectedBulkRooms : [roomNumber];
     setSubmitting(true);
     const res = await createAdvanceBooking({
       guestName,
@@ -130,14 +190,15 @@ export const FrontDeskScreen: React.FC = () => {
       address,
       companyName,
       gstNumber,
-      roomNumber,
+      roomNumber: targetRooms[0],
+      roomNumbers: targetRooms,
       checkInDate,
       checkOutDate,
       adults: Number(adults) || 2,
       ratePerNight: Number(ratePerNight) || 2000,
       discount: Number(discount) || 0,
       withGst,
-      gstRate,
+      gstRate: defaultGst,
       advanceAmount: Number(advanceAmt) || 0,
       paymentMethod,
       bookingSource: 'Direct',
@@ -149,7 +210,9 @@ export const FrontDeskScreen: React.FC = () => {
     }
     Alert.alert(
       'Advance Booking Saved',
-      `${guestName} booked in Room ${roomNumber} (${withGst ? `With GST ${gstRate}%` : 'No GST 0%'}).`
+      `${guestName} booked in Room(s) ${targetRooms.join(', ')} (${
+        withGst ? `GST ${defaultGst}%` : 'Without GST'
+      }).`
     );
     resetForm();
   };
@@ -159,25 +222,46 @@ export const FrontDeskScreen: React.FC = () => {
       Alert.alert('Validation', 'Guest name and 10-digit mobile number are required.');
       return;
     }
+    const nowTimeStr = new Date().toLocaleTimeString('en-IN', {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
     setSubmitting(true);
     const res = await performCheckIn({
       linkedBookingId: linkedBookingId || undefined,
       guestName,
       mobile,
+      email,
+      idType,
       aadhaarNumber: aadhaar,
       address,
+      nationality,
+      comingFrom,
+      goingTo,
+      purposeOfVisit,
+      mealPlan,
       companyName,
       gstNumber,
       roomNumber,
       checkInDate,
+      arrivalTime: nowTimeStr,
       checkOutDate,
       adults: Number(adults) || 2,
       ratePerNight: Number(ratePerNight) || 2000,
       discount: Number(discount) || 0,
       withGst,
-      gstRate,
+      gstRate: defaultGst,
       advanceAmount: Number(advanceAmt) || 0,
       paymentMethod,
+      isCFormRequired,
+      cFormData: isCFormRequired
+        ? {
+            passportNumber: passportNo,
+            passportCountry: passportCountry || nationality,
+            visaNumber: visaNo,
+            portOfArrival,
+          }
+        : undefined,
     });
     setSubmitting(false);
     if (!res.ok) {
@@ -186,7 +270,7 @@ export const FrontDeskScreen: React.FC = () => {
     }
     Alert.alert(
       'Guest Checked In',
-      `${guestName} checked into Room ${roomNumber} (${withGst ? `With GST ${gstRate}%` : 'No GST 0%'}).`
+      `${guestName} checked into Room ${roomNumber}. Logged-in user & check-in timestamp saved automatically!`
     );
     resetForm();
     setSubMode('inhouse');
@@ -202,24 +286,45 @@ export const FrontDeskScreen: React.FC = () => {
       : b.isWithoutGst === true ||
         b.gstInvoice === false ||
         (b.gstRate !== undefined && Number(b.gstRate) <= 0);
-    const rate = existingInv
-      ? Number(existingInv.gstRate) || 5
-      : Number(b.gstRate || b.taxRate || 5);
 
     setCheckoutTarget(b);
     setCoExtraAmt('0');
     setCoDiscount(String(b.discountAmount || 0));
     setCoWithGst(!savedNoGst);
-    setCoGstRate(rate > 0 ? rate : 5);
     setCoCollectedNow(String(b.dueAmount ?? 0));
     setCoPayMethod(b.paymentMethod || 'UPI');
   };
 
   const pendingAdvanceList = state.bookings.filter(
-    (b) => !b.isCheckedIn && !b.isCompleted && b.status !== 'Cancelled' && b.status !== 'Checked Out'
+    (b) =>
+      !b.isCheckedIn &&
+      !b.isCompleted &&
+      b.status !== 'Cancelled' &&
+      b.status !== 'Checked Out'
   );
+  const filteredReservations = pendingAdvanceList.filter((b) => {
+    if (!matchesQuickDateFilter(b.checkInDate || b.bookingDate, dateFilter)) return false;
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      const hay = `${b.guestName} ${b.mobile} ${b.roomNumber} ${b.id}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
   const activeInHouseList = state.bookings.filter(
-    (b) => (b.isCheckedIn || b.status === 'Checked In') && !b.isCompleted && b.status !== 'Checked Out'
+    (b) =>
+      (b.isCheckedIn || b.status === 'Checked In') &&
+      !b.isCompleted &&
+      b.status !== 'Checked Out'
+  );
+
+  const foreignCheckins = state.checkins.filter(
+    (c) =>
+      c.isCFormRequired ||
+      (c.nationality &&
+        c.nationality.toLowerCase() !== 'indian' &&
+        c.nationality.toLowerCase() !== 'india')
   );
 
   const isCheckInLockedByInv = Boolean(
@@ -229,26 +334,43 @@ export const FrontDeskScreen: React.FC = () => {
 
   return (
     <View style={styles.root}>
-      {/* Sub-Navigation Pills */}
-      <View style={styles.subBar}>
-        {[
-          { key: 'advance', label: 'Advance Booking', Icon: CalendarPlus },
-          { key: 'checkin', label: 'Guest Check-In', Icon: LogIn },
-          { key: 'inhouse', label: `In-House (${activeInHouseList.length})`, Icon: LogOut },
-        ].map(({ key, label, Icon }) => {
-          const active = subMode === key;
-          return (
-            <TouchableOpacity
-              key={key}
-              onPress={() => setSubMode(key as FrontSubMode)}
-              style={[styles.subBtn, active && styles.subBtnActive]}
-            >
-              <Icon size={14} color={active ? COLORS.goldBright : COLORS.textSecondary} />
-              <Text style={[styles.subBtnText, active && styles.subBtnTextActive]}>{label}</Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
+      <SubTabStrip
+        activeId={subMode}
+        onSelect={(id) => setSubMode(id as FrontSubMode)}
+        tabs={[
+          { id: 'advance', label: 'Advance Booking', Icon: CalendarPlus },
+          {
+            id: 'reservations',
+            label: 'All Reservations',
+            count: pendingAdvanceList.length,
+            Icon: ClipboardList,
+          },
+          { id: 'checkin', label: 'Guest Check-In', Icon: LogIn },
+          {
+            id: 'inhouse',
+            label: 'In-House & Checkout',
+            count: activeInHouseList.length,
+            Icon: LogOut,
+          },
+          {
+            id: 'cform',
+            label: 'Form-C Register',
+            count: foreignCheckins.length,
+            Icon: Globe,
+          },
+        ]}
+      />
+
+      {(subMode === 'reservations' || subMode === 'inhouse' || subMode === 'checkin') && (
+        <DateFilterBar
+          activeFilter={dateFilter}
+          onChangeFilter={setDateFilter}
+          searchQuery={searchQuery}
+          onChangeSearch={setSearchQuery}
+          showUpcoming
+          searchPlaceholder="Search guest name, mobile, room..."
+        />
+      )}
 
       <ScrollView contentContainerStyle={styles.scroll}>
         {(subMode === 'advance' || subMode === 'checkin') && (
@@ -257,16 +379,18 @@ export const FrontDeskScreen: React.FC = () => {
               {subMode === 'advance'
                 ? 'New Advance Reservation'
                 : linkedBookingId
-                ? `Check-In Linked Booking (${linkedBookingId})`
-                : 'Walk-In / Reservation Check-In'}
+                ? `Check-In Reservation (${linkedBookingId})`
+                : 'Walk-In / Guest Check-In'}
             </Text>
 
-            {subMode === 'checkin' && pendingAdvanceList.length > 0 && (
+            {subMode === 'checkin' && filteredReservations.length > 0 && (
               <View style={styles.prefillBox}>
-                <Text style={styles.prefillLabel}>LOAD SAVED ADVANCE BOOKING:</Text>
+                <Text style={styles.prefillLabel}>
+                  TAP TO PREFILL FROM ADVANCE BOOKING ({filteredReservations.length}):
+                </Text>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                   <View style={{ flexDirection: 'row', gap: 8 }}>
-                    {pendingAdvanceList.map((b) => {
+                    {filteredReservations.map((b) => {
                       const noGst =
                         b.isWithoutGst === true ||
                         (b.gstRate !== undefined && Number(b.gstRate) <= 0);
@@ -283,7 +407,7 @@ export const FrontDeskScreen: React.FC = () => {
                             {b.guestName} (Rm {b.roomNumber})
                           </Text>
                           <Text style={styles.prefillChipSub}>
-                            {noGst ? 'No GST (0%)' : `With GST (${b.gstRate || 5}%)`}
+                            {b.checkInDate} • {noGst ? 'No GST' : `GST ${b.gstRate || defaultGst}%`}
                           </Text>
                         </TouchableOpacity>
                       );
@@ -293,73 +417,42 @@ export const FrontDeskScreen: React.FC = () => {
               </View>
             )}
 
-            {/* TAX / BILLING MODE: WITH GST vs NO GST (0%) */}
-            <View style={styles.gstBox}>
-              <Text style={styles.gstHeader}>
-                TAX / BILLING MODE (WITH GST vs NO GST)
-              </Text>
-              {subMode === 'checkin' && isCheckInLockedByInv ? (
-                <View style={styles.lockedBanner}>
-                  <Lock size={14} color={COLORS.amber} />
-                  <Text style={styles.lockedText}>
-                    Invoice already generated for this booking — GST mode is locked ({withGst ? `${gstRate}% GST` : 'No GST'}). Generate a separate invoice from Invoices tab if needed.
+            {/* Single Clean GST Invoice Click / Unclick Checkbox (Uses Profile Settings GST %) */}
+            {subMode === 'checkin' && isCheckInLockedByInv ? (
+              <View style={styles.lockedBanner}>
+                <Lock size={14} color={COLORS.amber} />
+                <Text style={styles.lockedText}>
+                  Invoice already generated — GST mode locked (
+                  {withGst ? `GST ${defaultGst}%` : 'Without GST'}).
+                </Text>
+              </View>
+            ) : (
+              <TouchableOpacity
+                activeOpacity={0.82}
+                onPress={() => setWithGst((p) => !p)}
+                style={[
+                  styles.gstSingleCheck,
+                  withGst && {
+                    borderColor: COLORS.emerald,
+                    backgroundColor: COLORS.emeraldSoft,
+                  },
+                ]}
+              >
+                {withGst ? (
+                  <CheckSquare size={20} color={COLORS.emerald} />
+                ) : (
+                  <Square size={20} color={COLORS.textSecondary} />
+                )}
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.gstSingleTitle}>
+                    GST Invoice ({withGst ? `${defaultGst}% GST Applied` : 'Unchecked — 0% Without GST'})
+                  </Text>
+                  <Text style={styles.gstSingleSub}>
+                    Click / unclick for GST Invoice. Change GST % anytime in My Profile Settings.
                   </Text>
                 </View>
-              ) : (
-                <>
-                  <View style={styles.gstToggleRow}>
-                    <TouchableOpacity
-                      onPress={() => setWithGst(true)}
-                      style={[
-                        styles.gstOptionBtn,
-                        withGst && { backgroundColor: COLORS.emerald, borderColor: COLORS.emerald },
-                      ]}
-                    >
-                      <Text style={[styles.gstOptionText, withGst && { color: '#FFF' }]}>
-                        With GST ({gstRate}%)
-                      </Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      onPress={() => setWithGst(false)}
-                      style={[
-                        styles.gstOptionBtn,
-                        !withGst && { backgroundColor: COLORS.amber, borderColor: COLORS.amber },
-                      ]}
-                    >
-                      <Text style={[styles.gstOptionText, !withGst && { color: '#FFF' }]}>
-                        No GST (0% Bill)
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-                  {withGst && (
-                    <View style={styles.slabRow}>
-                      {[5, 12, 18].map((slab) => (
-                        <TouchableOpacity
-                          key={slab}
-                          onPress={() => setGstRate(slab)}
-                          style={[
-                            styles.slabBtn,
-                            gstRate === slab && {
-                              backgroundColor: COLORS.gold,
-                              borderColor: COLORS.goldDark,
-                            },
-                          ]}
-                        >
-                          <Text
-                            style={[
-                              styles.slabBtnText,
-                              gstRate === slab && { color: COLORS.espresso },
-                            ]}
-                          >
-                            {slab}% GST
-                          </Text>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-                  )}
-                </>
-              )}
-            </View>
+              </TouchableOpacity>
+            )}
 
             {/* Guest Fields */}
             <Text style={styles.inputLabel}>Guest Full Name *</Text>
@@ -367,6 +460,7 @@ export const FrontDeskScreen: React.FC = () => {
               value={guestName}
               onChangeText={setGuestName}
               placeholder="e.g. Rajesh Sharma"
+              placeholderTextColor={COLORS.textMuted}
               style={styles.input}
             />
 
@@ -379,32 +473,193 @@ export const FrontDeskScreen: React.FC = () => {
                   keyboardType="phone-pad"
                   maxLength={10}
                   placeholder="9876543210"
+                  placeholderTextColor={COLORS.textMuted}
                   style={styles.input}
                 />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={styles.inputLabel}>Aadhaar / ID No.</Text>
+                <Text style={styles.inputLabel}>ID / Aadhaar No.</Text>
                 <TextInput
                   value={aadhaar}
                   onChangeText={setAadhaar}
-                  placeholder="12-digit ID"
+                  placeholder="ID Number"
+                  placeholderTextColor={COLORS.textMuted}
                   style={styles.input}
                 />
               </View>
             </View>
 
-            {/* Room Selector */}
-            <Text style={styles.inputLabel}>Select Room</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 10 }}>
+            {subMode === 'checkin' && (
+              <>
+                <View style={styles.twoCol}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.inputLabel}>Coming From</Text>
+                    <TextInput
+                      value={comingFrom}
+                      onChangeText={setComingFrom}
+                      placeholder="City"
+                      placeholderTextColor={COLORS.textMuted}
+                      style={styles.input}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.inputLabel}>Going To</Text>
+                    <TextInput
+                      value={goingTo}
+                      onChangeText={setGoingTo}
+                      placeholder="Next City"
+                      placeholderTextColor={COLORS.textMuted}
+                      style={styles.input}
+                    />
+                  </View>
+                </View>
+
+                <View style={styles.twoCol}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.inputLabel}>Nationality</Text>
+                    <TextInput
+                      value={nationality}
+                      onChangeText={(val) => {
+                        setNationality(val);
+                        if (
+                          val.trim() &&
+                          val.trim().toLowerCase() !== 'indian' &&
+                          val.trim().toLowerCase() !== 'india'
+                        ) {
+                          setIsCFormRequired(true);
+                        }
+                      }}
+                      placeholder="Indian"
+                      placeholderTextColor={COLORS.textMuted}
+                      style={styles.input}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.inputLabel}>Meal Plan</Text>
+                    <TextInput
+                      value={mealPlan}
+                      onChangeText={setMealPlan}
+                      placeholder="EP / CP / MAP"
+                      placeholderTextColor={COLORS.textMuted}
+                      style={styles.input}
+                    />
+                  </View>
+                </View>
+
+                {/* Optional Foreigner Form-C Toggle */}
+                <TouchableOpacity
+                  onPress={() => setIsCFormRequired((p) => !p)}
+                  style={styles.cformToggle}
+                >
+                  {isCFormRequired ? (
+                    <CheckSquare size={17} color={COLORS.blue} />
+                  ) : (
+                    <Square size={17} color={COLORS.textSecondary} />
+                  )}
+                  <Text style={styles.cformToggleText}>
+                    Foreign National Guest (Enable Police Form-C Details)
+                  </Text>
+                </TouchableOpacity>
+
+                {isCFormRequired && (
+                  <View style={styles.cformBox}>
+                    <View style={styles.twoCol}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.inputLabel}>Passport No. *</Text>
+                        <TextInput
+                          value={passportNo}
+                          onChangeText={setPassportNo}
+                          autoCapitalize="characters"
+                          placeholder="Passport No"
+                          style={styles.input}
+                        />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.inputLabel}>Visa No. *</Text>
+                        <TextInput
+                          value={visaNo}
+                          onChangeText={setVisaNo}
+                          autoCapitalize="characters"
+                          placeholder="Visa No"
+                          style={styles.input}
+                        />
+                      </View>
+                    </View>
+                    <View style={styles.twoCol}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.inputLabel}>Passport Country</Text>
+                        <TextInput
+                          value={passportCountry}
+                          onChangeText={setPassportCountry}
+                          placeholder="USA / UK / etc."
+                          style={styles.input}
+                        />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.inputLabel}>Port of Arrival</Text>
+                        <TextInput
+                          value={portOfArrival}
+                          onChangeText={setPortOfArrival}
+                          placeholder="Airport"
+                          style={styles.input}
+                        />
+                      </View>
+                    </View>
+                  </View>
+                )}
+              </>
+            )}
+
+            {/* Room Selector (Single OR Bulk 3-4+ Rooms in Advance Booking!) */}
+            <View style={styles.roomSelectHeader}>
+              <Text style={styles.inputLabel}>
+                {subMode === 'advance' && bulkMode
+                  ? `Select Multiple Rooms (${selectedBulkRooms.length} Selected)`
+                  : 'Select Room'}
+              </Text>
+              {subMode === 'advance' && (
+                <TouchableOpacity
+                  onPress={() => {
+                    setBulkMode((prev) => !prev);
+                    if (!selectedBulkRooms.includes(roomNumber)) {
+                      setSelectedBulkRooms([roomNumber]);
+                    }
+                  }}
+                  style={[styles.bulkToggleBtn, bulkMode && styles.bulkToggleBtnActive]}
+                >
+                  <Text
+                    style={[
+                      styles.bulkToggleText,
+                      bulkMode && { color: COLORS.espresso, fontWeight: '800' },
+                    ]}
+                  >
+                    {bulkMode ? '✓ Bulk Multi-Room ON' : '+ Bulk Rooms (3-4 Rooms)'}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={{ marginBottom: 10 }}
+            >
               <View style={{ flexDirection: 'row', gap: 8 }}>
                 {state.rooms.map((rm) => {
-                  const selected = roomNumber === rm.number;
+                  const selected =
+                    subMode === 'advance' && bulkMode
+                      ? selectedBulkRooms.includes(rm.number)
+                      : roomNumber === rm.number;
                   return (
                     <TouchableOpacity
                       key={rm.id}
                       onPress={() => {
-                        setRoomNumber(rm.number);
-                        setRatePerNight(String(rm.rate || 2000));
+                        if (subMode === 'advance' && bulkMode) {
+                          toggleBulkRoom(rm.number);
+                        } else {
+                          setRoomNumber(rm.number);
+                          setRatePerNight(String(rm.rate || 2000));
+                        }
                       }}
                       style={[styles.roomChip, selected && styles.roomChipSelected]}
                     >
@@ -422,18 +677,34 @@ export const FrontDeskScreen: React.FC = () => {
 
             <View style={styles.twoCol}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.inputLabel}>Check-In (YYYY-MM-DD)</Text>
-                <TextInput value={checkInDate} onChangeText={setCheckInDate} style={styles.input} />
+                <Text style={styles.inputLabel} numberOfLines={1}>
+                  Check-In Date
+                </Text>
+                <TextInput
+                  value={checkInDate}
+                  onChangeText={setCheckInDate}
+                  placeholder="YYYY-MM-DD"
+                  style={styles.input}
+                />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={styles.inputLabel}>Check-Out (YYYY-MM-DD)</Text>
-                <TextInput value={checkOutDate} onChangeText={setCheckOutDate} style={styles.input} />
+                <Text style={styles.inputLabel} numberOfLines={1}>
+                  Check-Out Date
+                </Text>
+                <TextInput
+                  value={checkOutDate}
+                  onChangeText={setCheckOutDate}
+                  placeholder="YYYY-MM-DD"
+                  style={styles.input}
+                />
               </View>
             </View>
 
             <View style={styles.twoCol}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.inputLabel}>Tariff / Night (₹)</Text>
+                <Text style={styles.inputLabel} numberOfLines={1}>
+                  Tariff / Night (₹)
+                </Text>
                 <TextInput
                   value={ratePerNight}
                   onChangeText={setRatePerNight}
@@ -442,7 +713,9 @@ export const FrontDeskScreen: React.FC = () => {
                 />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={styles.inputLabel}>Advance Paid (₹)</Text>
+                <Text style={styles.inputLabel} numberOfLines={1}>
+                  Advance Paid (₹)
+                </Text>
                 <TextInput
                   value={advanceAmt}
                   onChangeText={setAdvanceAmt}
@@ -455,21 +728,27 @@ export const FrontDeskScreen: React.FC = () => {
             {withGst && (
               <View style={styles.twoCol}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.inputLabel}>Company (Optional)</Text>
+                  <Text style={styles.inputLabel} numberOfLines={1}>
+                    Company (Optional)
+                  </Text>
                   <TextInput
                     value={companyName}
                     onChangeText={setCompanyName}
                     placeholder="Corporate Name"
+                    placeholderTextColor={COLORS.textMuted}
                     style={styles.input}
                   />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.inputLabel}>Company GSTIN</Text>
+                  <Text style={styles.inputLabel} numberOfLines={1}>
+                    Company GSTIN
+                  </Text>
                   <TextInput
                     value={gstNumber}
                     onChangeText={setGstNumber}
                     autoCapitalize="characters"
                     placeholder="22AAAAA0000A1Z5"
+                    placeholderTextColor={COLORS.textMuted}
                     style={styles.input}
                   />
                 </View>
@@ -479,12 +758,14 @@ export const FrontDeskScreen: React.FC = () => {
             {/* Live Bill Breakdown */}
             <View style={styles.summaryBox}>
               <View style={styles.sumRow}>
-                <Text style={styles.sumLabel}>Room Tariff ({nights} Night):</Text>
+                <Text style={styles.sumLabel}>
+                  Room Tariff ({activeRoomsForCalc.length} Rm × {nights} Night):
+                </Text>
                 <Text style={styles.sumVal}>₹{roomSub.toLocaleString('en-IN')}</Text>
               </View>
               <View style={styles.sumRow}>
                 <Text style={styles.sumLabel}>
-                  {withGst ? `GST (${gstRate}%):` : 'GST (No GST — 0%):'}
+                  {withGst ? `GST (${defaultGst}%):` : 'GST (Without GST — 0%):'}
                 </Text>
                 <Text style={styles.sumVal}>₹{taxAmt.toLocaleString('en-IN')}</Text>
               </View>
@@ -509,43 +790,50 @@ export const FrontDeskScreen: React.FC = () => {
                 {submitting
                   ? 'Syncing to Live Server...'
                   : subMode === 'advance'
-                  ? `Confirm Advance Booking (${withGst ? `${gstRate}% GST` : 'No GST'})`
-                  : `Complete Guest Check-In (${withGst ? `${gstRate}% GST` : 'No GST'})`}
+                  ? `Confirm Advance Booking (${activeRoomsForCalc.length} Room${
+                      activeRoomsForCalc.length > 1 ? 's' : ''
+                    })`
+                  : 'Complete Guest Check-In'}
               </Text>
             </TouchableOpacity>
           </View>
         )}
 
-        {/* Active In-House Guests & Pending Reservations */}
-        {subMode === 'inhouse' && (
+        {/* All Advance Reservations List with Today / All Filter */}
+        {subMode === 'reservations' && (
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>In-House Guests Ready for Checkout</Text>
-            {activeInHouseList.length === 0 ? (
-              <Text style={styles.emptyText}>No active checked-in rooms right now.</Text>
+            <Text style={styles.cardTitle}>
+              Advance Reservations ({filteredReservations.length})
+            </Text>
+            {filteredReservations.length === 0 ? (
+              <Text style={styles.emptyText}>
+                No advance reservations match this filter. Tap "All Records" above to view all.
+              </Text>
             ) : (
-              activeInHouseList.map((b) => {
+              filteredReservations.map((b) => {
                 const noGst =
                   b.isWithoutGst === true ||
                   (b.gstRate !== undefined && Number(b.gstRate) <= 0);
                 return (
                   <View key={b.id} style={styles.inhouseRow}>
-                    <View style={{ flex: 1 }}>
+                    <View style={{ flex: 1, marginRight: 8 }}>
                       <Text style={styles.inhouseGuest}>
                         Rm {b.roomNumber} — {b.guestName}
                       </Text>
                       <Text style={styles.inhouseSub}>
                         {b.checkInDate} → {b.checkOutDate} •{' '}
-                        {noGst ? 'No GST (0%)' : `With GST (${b.gstRate || 5}%)`}
+                        {noGst ? 'Without GST' : `GST ${b.gstRate || defaultGst}%`}
                       </Text>
                       <Text style={styles.inhouseDue}>
-                        Paid: ₹{b.amountPaid ?? b.advanceAmount ?? 0} | Due: ₹{b.dueAmount ?? 0}
+                        Advance: ₹{b.advanceAmount ?? 0} | Total: ₹
+                        {b.totalPayable || b.bookingAmount || 0}
                       </Text>
                     </View>
                     <TouchableOpacity
-                      onPress={() => openCheckoutModal(b)}
-                      style={styles.checkoutBtn}
+                      onPress={() => loadAdvanceBookingIntoCheckIn(b)}
+                      style={[styles.checkoutBtn, { backgroundColor: COLORS.emerald }]}
                     >
-                      <Text style={styles.checkoutBtnText}>Checkout</Text>
+                      <Text style={[styles.checkoutBtnText, { color: '#FFF' }]}>Check-In</Text>
                     </TouchableOpacity>
                   </View>
                 );
@@ -553,137 +841,204 @@ export const FrontDeskScreen: React.FC = () => {
             )}
           </View>
         )}
+
+        {/* Active In-House Guests & Checkout */}
+        {subMode === 'inhouse' && (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>In-House Guests Ready for Checkout</Text>
+            {activeInHouseList.length === 0 ? (
+              <Text style={styles.emptyText}>No active checked-in rooms right now.</Text>
+            ) : (
+              activeInHouseList
+                .filter((b) => {
+                  if (!matchesQuickDateFilter(b.checkInDate, dateFilter)) return false;
+                  if (searchQuery.trim()) {
+                    const q = searchQuery.toLowerCase();
+                    return `${b.guestName} ${b.roomNumber}`.toLowerCase().includes(q);
+                  }
+                  return true;
+                })
+                .map((b) => {
+                  const noGst =
+                    b.isWithoutGst === true ||
+                    (b.gstRate !== undefined && Number(b.gstRate) <= 0);
+                  return (
+                    <View key={b.id} style={styles.inhouseRow}>
+                      <View style={{ flex: 1, marginRight: 8 }}>
+                        <Text style={styles.inhouseGuest}>
+                          Rm {b.roomNumber} — {b.guestName}
+                        </Text>
+                        <Text style={styles.inhouseSub}>
+                          {b.checkInDate} → {b.checkOutDate} •{' '}
+                          {noGst ? 'Without GST' : `GST ${b.gstRate || defaultGst}%`}
+                        </Text>
+                        <Text style={styles.inhouseDue}>
+                          Paid: ₹{b.amountPaid ?? b.advanceAmount ?? 0} | Due: ₹{b.dueAmount ?? 0}
+                        </Text>
+                      </View>
+                      <TouchableOpacity
+                        onPress={() => openCheckoutModal(b)}
+                        style={styles.checkoutBtn}
+                      >
+                        <Text style={styles.checkoutBtnText}>Checkout</Text>
+                      </TouchableOpacity>
+                    </View>
+                  );
+                })
+            )}
+          </View>
+        )}
+
+        {/* Police Form-C Foreign Guest Register */}
+        {subMode === 'cform' && (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>
+              Foreign Guest Police Form-C Register ({foreignCheckins.length})
+            </Text>
+            {foreignCheckins.length === 0 ? (
+              <Text style={styles.emptyText}>No foreign national Form-C entries recorded yet.</Text>
+            ) : (
+              foreignCheckins.map((c) => (
+                <View key={c.id} style={styles.inhouseRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.inhouseGuest}>
+                      {c.guestName} ({c.nationality || 'Foreign'}) — Rm {c.roomNumber}
+                    </Text>
+                    <Text style={styles.inhouseSub}>
+                      Passport: {c.cFormData?.passportNumber || 'N/A'} • Visa:{' '}
+                      {c.cFormData?.visaNumber || 'N/A'}
+                    </Text>
+                    <Text style={styles.inhouseDue}>
+                      Stay: {c.checkInDate} → {c.checkOutDate}
+                    </Text>
+                  </View>
+                </View>
+              ))
+            )}
+          </View>
+        )}
       </ScrollView>
 
-      {/* Checkout Clearance Modal */}
+      {/* Checkout Clearance Modal (Auto-alerts Housekeeping Room Dirty!) */}
       <Modal visible={Boolean(checkoutTarget)} transparent animationType="slide">
         <View style={styles.modalBackdrop}>
           <View style={styles.modalSheet}>
-            {checkoutTarget && (() => {
-              const existingInv = state.invoices.find(
-                (i) => i.bookingId === checkoutTarget.id && !i.isSeparateInvoice
-              );
-              const baseRm = Number(checkoutTarget.roomSubtotal || checkoutTarget.bookingAmount || 0);
-              const extraN = Number(coExtraAmt) || 0;
-              const discN = Number(coDiscount) || 0;
-              const txBase = Math.max(0, baseRm + extraN - discN);
-              const effR = coWithGst ? coGstRate : 0;
-              const txAmt = effR > 0 ? Math.round(((txBase * effR) / 100) * 100) / 100 : 0;
-              const gTot = Math.round((txBase + txAmt) * 100) / 100;
+            {checkoutTarget &&
+              (() => {
+                const existingInv = state.invoices.find(
+                  (i) => i.bookingId === checkoutTarget.id && !i.isSeparateInvoice
+                );
+                const baseRm = Number(
+                  checkoutTarget.roomSubtotal || checkoutTarget.bookingAmount || 0
+                );
+                const extraN = Number(coExtraAmt) || 0;
+                const discN = Number(coDiscount) || 0;
+                const txBase = Math.max(0, baseRm + extraN - discN);
+                const effR = coWithGst ? defaultGst : 0;
+                const txAmt = effR > 0 ? Math.round(((txBase * effR) / 100) * 100) / 100 : 0;
+                const gTot = Math.round((txBase + txAmt) * 100) / 100;
 
-              return (
-                <>
-                  <Text style={styles.cardTitle}>
-                    Checkout Room {checkoutTarget.roomNumber} — {checkoutTarget.guestName}
-                  </Text>
+                return (
+                  <>
+                    <Text style={styles.cardTitle}>
+                      Checkout Room {checkoutTarget.roomNumber} — {checkoutTarget.guestName}
+                    </Text>
 
-                  {existingInv ? (
-                    <View style={styles.lockedBanner}>
-                      <Lock size={14} color={COLORS.amber} />
-                      <Text style={styles.lockedText}>
-                        Locked Invoice ({existingInv.invoiceNumber}):{' '}
-                        {coWithGst ? `With GST (${coGstRate}%)` : 'No GST (0%)'} — GST cannot be edited on an existing invoice.
-                      </Text>
-                    </View>
-                  ) : (
-                    <View style={styles.gstToggleRow}>
+                    {existingInv ? (
+                      <View style={styles.lockedBanner}>
+                        <Lock size={14} color={COLORS.amber} />
+                        <Text style={styles.lockedText}>
+                          Locked Invoice ({existingInv.invoiceNumber}):{' '}
+                          {coWithGst ? `GST (${defaultGst}%)` : 'Without GST'}
+                        </Text>
+                      </View>
+                    ) : (
                       <TouchableOpacity
-                        onPress={() => setCoWithGst(true)}
+                        onPress={() => setCoWithGst((p) => !p)}
                         style={[
-                          styles.gstOptionBtn,
-                          coWithGst && { backgroundColor: COLORS.emerald, borderColor: COLORS.emerald },
+                          styles.gstSingleCheck,
+                          coWithGst && {
+                            borderColor: COLORS.emerald,
+                            backgroundColor: COLORS.emeraldSoft,
+                          },
                         ]}
                       >
-                        <Text style={[styles.gstOptionText, coWithGst && { color: '#FFF' }]}>
-                          With GST ({coGstRate}%)
+                        {coWithGst ? (
+                          <CheckSquare size={19} color={COLORS.emerald} />
+                        ) : (
+                          <Square size={19} color={COLORS.textSecondary} />
+                        )}
+                        <Text style={styles.gstSingleTitle}>
+                          GST Invoice ({coWithGst ? `${defaultGst}% GST` : 'Without GST 0%'})
                         </Text>
+                      </TouchableOpacity>
+                    )}
+
+                    <View style={[styles.twoCol, { marginTop: 10 }]}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.inputLabel}>Extra Charges (₹)</Text>
+                        <TextInput
+                          value={coExtraAmt}
+                          onChangeText={setCoExtraAmt}
+                          keyboardType="numeric"
+                          style={styles.input}
+                        />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.inputLabel}>Collecting Now (₹)</Text>
+                        <TextInput
+                          value={coCollectedNow}
+                          onChangeText={setCoCollectedNow}
+                          keyboardType="numeric"
+                          style={styles.input}
+                        />
+                      </View>
+                    </View>
+
+                    <View style={styles.summaryBox}>
+                      <View style={styles.sumRow}>
+                        <Text style={styles.sumLabel}>Final Bill Total:</Text>
+                        <Text style={styles.sumTotalVal}>₹{gTot.toLocaleString('en-IN')}</Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.twoCol}>
+                      <TouchableOpacity
+                        onPress={() => setCheckoutTarget(null)}
+                        style={styles.cancelModalBtn}
+                      >
+                        <Text style={styles.cancelModalText}>Cancel</Text>
                       </TouchableOpacity>
                       <TouchableOpacity
-                        onPress={() => setCoWithGst(false)}
-                        style={[
-                          styles.gstOptionBtn,
-                          !coWithGst && { backgroundColor: COLORS.amber, borderColor: COLORS.amber },
-                        ]}
+                        onPress={async () => {
+                          const target = checkoutTarget;
+                          setCheckoutTarget(null);
+                          const res = await performCheckout({
+                            bookingOrCheckInId: target.id,
+                            extraChargeAmt: Number(coExtraAmt) || 0,
+                            discount: Number(coDiscount) || 0,
+                            withGst: coWithGst,
+                            gstRate: defaultGst,
+                            collectedNow: Number(coCollectedNow) || 0,
+                            paymentMethod: coPayMethod,
+                          });
+                          if (res.ok) {
+                            Alert.alert(
+                              'Checked Out & Housekeeping Notified',
+                              `Room ${target.roomNumber} checked out and marked DIRTY. Instant notification sent to Housekeeping!`
+                            );
+                          } else {
+                            Alert.alert('Checkout Error', res.error || 'Could not complete checkout');
+                          }
+                        }}
+                        style={[styles.primaryActionBtn, { flex: 1.5, marginTop: 0 }]}
                       >
-                        <Text style={[styles.gstOptionText, !coWithGst && { color: '#FFF' }]}>
-                          No GST (0%)
-                        </Text>
+                        <Text style={styles.primaryActionText}>Finalize Checkout</Text>
                       </TouchableOpacity>
                     </View>
-                  )}
-
-                  <View style={[styles.twoCol, { marginTop: 10 }]}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.inputLabel}>Extra Charges (₹)</Text>
-                      <TextInput
-                        value={coExtraAmt}
-                        onChangeText={setCoExtraAmt}
-                        keyboardType="numeric"
-                        style={styles.input}
-                      />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.inputLabel}>Collecting Now (₹)</Text>
-                      <TextInput
-                        value={coCollectedNow}
-                        onChangeText={setCoCollectedNow}
-                        keyboardType="numeric"
-                        style={styles.input}
-                      />
-                    </View>
-                  </View>
-
-                  <View style={styles.summaryBox}>
-                    <View style={styles.sumRow}>
-                      <Text style={styles.sumLabel}>Final Bill Total:</Text>
-                      <Text style={styles.sumTotalVal}>₹{gTot.toLocaleString('en-IN')}</Text>
-                    </View>
-                  </View>
-
-                  <View style={styles.twoCol}>
-                    <TouchableOpacity
-                      onPress={() => setCheckoutTarget(null)}
-                      style={[styles.gstOptionBtn, { flex: 1 }]}
-                    >
-                      <Text style={styles.gstOptionText}>Cancel</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      onPress={async () => {
-                        const res = await performCheckout({
-                          bookingOrCheckInId: checkoutTarget.id,
-                          extraChargeAmt: Number(coExtraAmt) || 0,
-                          discount: Number(coDiscount) || 0,
-                          withGst: coWithGst,
-                          gstRate: coGstRate,
-                          collectedNow: Number(coCollectedNow) || 0,
-                          paymentMethod: coPayMethod,
-                        });
-                        setCheckoutTarget(null);
-                        if (res.ok && res.invoice) {
-                          Alert.alert(
-                            'Checked Out & Invoice Locked',
-                            `Invoice ${res.invoice.invoiceNumber} generated (${
-                              res.invoice.isWithoutGst ? 'No GST 0%' : `With GST ${res.invoice.gstRate}%`
-                            }).`
-                          );
-                        } else if (!res.ok) {
-                          Alert.alert('Checkout Error', res.error || 'Failed');
-                        }
-                      }}
-                      style={[
-                        styles.gstOptionBtn,
-                        { flex: 1.4, backgroundColor: COLORS.espresso, borderColor: COLORS.espresso },
-                      ]}
-                    >
-                      <CheckCircle2 size={15} color={COLORS.goldBright} />
-                      <Text style={[styles.gstOptionText, { color: COLORS.goldBright }]}>
-                        Complete Checkout
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-                </>
-              );
-            })()}
+                  </>
+                );
+              })()}
           </View>
         </View>
       </Modal>
@@ -693,190 +1048,210 @@ export const FrontDeskScreen: React.FC = () => {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: COLORS.bg },
-  subBar: {
-    flexDirection: 'row',
-    padding: 10,
-    gap: 8,
-    backgroundColor: '#FFFFFF',
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
-  },
-  subBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 5,
-    paddingVertical: 9,
-    borderRadius: 12,
-    backgroundColor: '#F1F5F9',
-  },
-  subBtnActive: { backgroundColor: COLORS.espresso },
-  subBtnText: { fontSize: 11, fontWeight: '700', color: COLORS.textSecondary },
-  subBtnTextActive: { color: COLORS.goldBright, fontWeight: '800' },
-  scroll: { padding: 14, paddingBottom: 32 },
+  scroll: { padding: 12, paddingBottom: 32 },
   card: {
     backgroundColor: '#FFFFFF',
     borderRadius: 18,
-    padding: 16,
+    padding: 15,
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-  cardTitle: { fontSize: 15.5, fontWeight: '800', color: COLORS.textPrimary, marginBottom: 12 },
-  prefillBox: {
-    backgroundColor: COLORS.goldSoft,
-    padding: 10,
-    borderRadius: 12,
+  cardTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: COLORS.textPrimary,
     marginBottom: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(196,154,58,0.35)',
   },
-  prefillLabel: { fontSize: 10, fontWeight: '800', color: COLORS.goldDark, marginBottom: 6 },
+  prefillBox: {
+    backgroundColor: '#FAF6EE',
+    borderRadius: 12,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#EADBC0',
+    marginBottom: 12,
+  },
+  prefillLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: COLORS.goldDark,
+    marginBottom: 6,
+  },
   prefillChip: {
     backgroundColor: '#FFFFFF',
+    borderRadius: 10,
     paddingHorizontal: 11,
     paddingVertical: 7,
-    borderRadius: 10,
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-  prefillChipActive: { borderColor: COLORS.espresso, backgroundColor: '#FEF9EE' },
-  prefillChipTitle: { fontSize: 11.5, fontWeight: '800', color: COLORS.textPrimary },
-  prefillChipSub: { fontSize: 10, fontWeight: '700', color: COLORS.goldDark },
-  gstBox: {
-    backgroundColor: '#F8FAFC',
-    padding: 12,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    marginBottom: 12,
+  prefillChipActive: {
+    borderColor: COLORS.gold,
+    backgroundColor: '#FFF9EB',
   },
-  gstHeader: { fontSize: 10.5, fontWeight: '800', color: COLORS.textSecondary, marginBottom: 8 },
-  gstToggleRow: { flexDirection: 'row', gap: 8 },
-  gstOptionBtn: {
-    flex: 1,
-    height: 42,
-    borderRadius: 11,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    backgroundColor: '#FFFFFF',
+  prefillChipTitle: { fontSize: 12, fontWeight: '800', color: COLORS.textPrimary },
+  prefillChipSub: { fontSize: 10, color: COLORS.textSecondary, marginTop: 1 },
+  gstSingleCheck: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-  },
-  gstOptionText: { fontSize: 12, fontWeight: '800', color: COLORS.textPrimary },
-  slabRow: { flexDirection: 'row', gap: 8, marginTop: 8 },
-  slabBtn: {
-    flex: 1,
-    paddingVertical: 7,
-    borderRadius: 9,
-    borderWidth: 1,
+    gap: 10,
+    padding: 12,
+    borderRadius: 13,
+    borderWidth: 1.5,
     borderColor: COLORS.border,
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
+    backgroundColor: '#FAF8F5',
+    marginBottom: 12,
   },
-  slabBtnText: { fontSize: 11.5, fontWeight: '800', color: COLORS.textSecondary },
+  gstSingleTitle: { fontSize: 12.5, fontWeight: '800', color: COLORS.textPrimary },
+  gstSingleSub: { fontSize: 10.5, color: COLORS.textSecondary, marginTop: 2 },
   lockedBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    padding: 10,
+    padding: 11,
     borderRadius: 11,
     backgroundColor: COLORS.amberSoft,
-    borderWidth: 1,
-    borderColor: COLORS.amberBorder,
+    marginBottom: 12,
   },
-  lockedText: { flex: 1, fontSize: 11, fontWeight: '700', color: '#92400E' },
+  lockedText: { flex: 1, fontSize: 11, fontWeight: '700', color: COLORS.amber },
   inputLabel: {
-    fontSize: 11,
+    fontSize: 11.5,
     fontWeight: '700',
     color: COLORS.textSecondary,
     marginBottom: 5,
-    marginTop: 6,
   },
   input: {
     height: 44,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: 11,
-    paddingHorizontal: 12,
-    fontSize: 13.5,
-    fontWeight: '600',
-    color: COLORS.textPrimary,
-    backgroundColor: '#FAFAFA',
-    marginBottom: 4,
-  },
-  twoCol: { flexDirection: 'row', gap: 10 },
-  roomChip: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
     borderRadius: 11,
     borderWidth: 1,
     borderColor: COLORS.border,
     backgroundColor: '#F8FAFC',
+    paddingHorizontal: 12,
+    paddingVertical: 0,
+    fontSize: 13.5,
+    fontWeight: '600',
+    color: COLORS.textPrimary,
+    marginBottom: 10,
   },
-  roomChipSelected: { backgroundColor: COLORS.espresso, borderColor: COLORS.gold },
-  roomChipNum: { fontSize: 12, fontWeight: '800', color: COLORS.textPrimary },
-  roomChipSub: { fontSize: 10, color: COLORS.textSecondary, marginTop: 1 },
-  summaryBox: {
-    marginTop: 12,
-    padding: 12,
-    borderRadius: 13,
-    backgroundColor: COLORS.goldSoft,
+  twoCol: { flexDirection: 'row', gap: 10 },
+  cformToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 8,
+    marginBottom: 6,
+  },
+  cformToggleText: { fontSize: 12, fontWeight: '700', color: COLORS.blue },
+  cformBox: {
+    backgroundColor: COLORS.blueSoft,
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 10,
+  },
+  roomSelectHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+    gap: 8,
+  },
+  bulkToggleBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    backgroundColor: '#F3EFE6',
     borderWidth: 1,
-    borderColor: 'rgba(196,154,58,0.35)',
-    gap: 5,
+    borderColor: '#DFD4BE',
   },
-  sumRow: { flexDirection: 'row', justifyContent: 'space-between' },
+  bulkToggleBtnActive: {
+    backgroundColor: COLORS.gold,
+    borderColor: COLORS.goldDark,
+  },
+  bulkToggleText: { fontSize: 10.5, fontWeight: '700', color: COLORS.textPrimary },
+  roomChip: {
+    paddingHorizontal: 13,
+    paddingVertical: 9,
+    borderRadius: 12,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  roomChipSelected: {
+    backgroundColor: COLORS.espresso,
+    borderColor: COLORS.gold,
+  },
+  roomChipNum: { fontSize: 12.5, fontWeight: '800', color: COLORS.textPrimary },
+  roomChipSub: { fontSize: 10.5, color: COLORS.textSecondary, marginTop: 2 },
+  summaryBox: {
+    backgroundColor: '#FAF8F4',
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#EAE2D3',
+    gap: 6,
+    marginTop: 4,
+    marginBottom: 12,
+  },
+  sumRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   sumLabel: { fontSize: 12, color: COLORS.textSecondary, fontWeight: '600' },
-  sumVal: { fontSize: 12.5, fontWeight: '800', color: COLORS.textPrimary },
+  sumVal: { fontSize: 12.5, color: COLORS.textPrimary, fontWeight: '800' },
   sumTotalRow: {
     borderTopWidth: 1,
-    borderTopColor: 'rgba(196,154,58,0.3)',
+    borderTopColor: '#E5DEC9',
     paddingTop: 6,
-    marginTop: 3,
+    marginTop: 2,
   },
-  sumTotalLabel: { fontSize: 13.5, fontWeight: '800', color: COLORS.espresso },
-  sumTotalVal: { fontSize: 14.5, fontWeight: '900', color: COLORS.emerald },
+  sumTotalLabel: { fontSize: 13.5, fontWeight: '900', color: COLORS.espresso },
+  sumTotalVal: { fontSize: 15, fontWeight: '900', color: COLORS.goldDark },
   primaryActionBtn: {
-    marginTop: 14,
-    height: 48,
-    borderRadius: 13,
+    minHeight: 48,
+    borderRadius: 14,
     backgroundColor: COLORS.espresso,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: COLORS.gold,
   },
-  primaryActionText: { color: COLORS.goldBright, fontSize: 13.5, fontWeight: '800' },
-  emptyText: { fontSize: 12.5, color: COLORS.textMuted, paddingVertical: 14 },
+  primaryActionText: { fontSize: 13.5, fontWeight: '800', color: COLORS.goldBright },
+  emptyText: { fontSize: 12.5, color: COLORS.textMuted, paddingVertical: 12 },
   inhouseRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 12,
+    paddingVertical: 11,
     borderTopWidth: 1,
     borderTopColor: '#F1F5F9',
-    gap: 10,
   },
   inhouseGuest: { fontSize: 13.5, fontWeight: '800', color: COLORS.textPrimary },
   inhouseSub: { fontSize: 11.5, color: COLORS.textSecondary, marginTop: 2 },
   inhouseDue: { fontSize: 11.5, fontWeight: '700', color: COLORS.goldDark, marginTop: 2 },
   checkoutBtn: {
-    backgroundColor: COLORS.rose,
-    paddingHorizontal: 14,
+    backgroundColor: COLORS.gold,
+    paddingHorizontal: 13,
     paddingVertical: 9,
     borderRadius: 10,
+    flexShrink: 0,
   },
-  checkoutBtnText: { color: '#FFFFFF', fontSize: 12, fontWeight: '800' },
+  checkoutBtnText: { fontSize: 12, fontWeight: '800', color: COLORS.espresso },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.65)',
+    backgroundColor: 'rgba(15, 11, 9, 0.65)',
     justifyContent: 'flex-end',
   },
   modalSheet: {
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    padding: 20,
-    gap: 8,
+    padding: 18,
+    paddingBottom: 28,
   },
+  cancelModalBtn: {
+    flex: 1,
+    minHeight: 48,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cancelModalText: { fontSize: 13, fontWeight: '700', color: COLORS.textSecondary },
 });

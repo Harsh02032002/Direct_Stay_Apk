@@ -1,27 +1,29 @@
 import React, { useState } from 'react';
 import {
-  SafeAreaView,
   View,
   Text,
   TouchableOpacity,
   ActivityIndicator,
   StyleSheet,
-  Platform,
-  StatusBar as RNStatusBar,
 } from 'react-native';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
-import { Building2, LogOut, RefreshCw } from 'lucide-react-native';
+import { Menu, Bell, RefreshCw, LogOut } from 'lucide-react-native';
 import { PmsProvider, usePms } from './src/context/PmsContext';
 import { AdminLoginScreen } from './src/screens/AdminLoginScreen';
 import { DashboardScreen } from './src/screens/DashboardScreen';
 import { FrontDeskScreen } from './src/screens/FrontDeskScreen';
 import { RoomsScreen } from './src/screens/RoomsScreen';
 import { InvoicesScreen } from './src/screens/InvoicesScreen';
-import { OperationsScreen } from './src/screens/OperationsScreen';
-import { AdminBottomTab, BottomTabBar } from './src/components/BottomTabBar';
+import { ServiceStoreModulesScreen } from './src/screens/ServiceStoreModulesScreen';
+import { FinanceGovernanceModulesScreen } from './src/screens/FinanceGovernanceModulesScreen';
+import { BottomTabBar } from './src/components/BottomTabBar';
+import { ALL_ADMIN_MODULES, ModulesDrawerModal } from './src/components/ModulesDrawerModal';
+import { AdminModuleId } from './src/types/pms';
 import { COLORS } from './src/theme/colors';
 
 const AdminMobileShell: React.FC = () => {
+  const insets = useSafeAreaInsets();
   const {
     session,
     bootstrapping,
@@ -34,7 +36,8 @@ const AdminMobileShell: React.FC = () => {
     logout,
   } = usePms();
 
-  const [activeTab, setActiveTab] = useState<AdminBottomTab>('dashboard');
+  const [activeModule, setActiveModule] = useState<AdminModuleId>('dashboard');
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   if (bootstrapping) {
     return (
@@ -51,65 +54,130 @@ const AdminMobileShell: React.FC = () => {
 
   const dirtyRoomsCount = state.rooms.filter((r) => r.status === 'Dirty').length;
   const unpaidInvoicesCount = state.invoices.filter((i) => !i.isPaid).length;
+  const unreadNotifCount = state.notifications.filter((n) => !n.read).length;
+  const totalBellAlerts = unreadNotifCount + dirtyRoomsCount;
+
+  const activeMeta = ALL_ADMIN_MODULES.find((m) => m.id === activeModule);
+  const moduleBadges: Partial<Record<AdminModuleId, number>> = {
+    rooms: dirtyRoomsCount,
+    housekeeping: dirtyRoomsCount,
+    invoice: unpaidInvoicesCount,
+    notifications: totalBellAlerts,
+    frontDesk: state.bookings.filter(
+      (b) => !b.isCheckedIn && !b.isCompleted && b.status !== 'Cancelled'
+    ).length,
+  };
 
   return (
-    <SafeAreaView style={styles.safeRoot}>
-      {/* Luxury Espresso Top Header */}
+    <View style={[styles.safeRoot, { paddingTop: insets.top }]}>
+      {/* Luxury Espresso Top Header with Left ☰ Menu Line & Right 🔔 Notification Bell */}
       <View style={styles.topHeader}>
         <View style={styles.brandLeft}>
-          <View style={styles.logoBadge}>
-            <Building2 size={17} color={COLORS.espresso} strokeWidth={2.4} />
-          </View>
+          <TouchableOpacity
+            activeOpacity={0.8}
+            onPress={() => setDrawerOpen(true)}
+            style={styles.menuBtn}
+          >
+            <Menu size={19} color={COLORS.espresso} strokeWidth={2.6} />
+          </TouchableOpacity>
           <View style={{ flex: 1 }}>
             <Text style={styles.hotelTitle} numberOfLines={1}>
               {hotelProfile?.name || 'DirectStay Admin'}
             </Text>
-            <Text style={styles.syncSubtitle}>
+            <Text style={styles.syncSubtitle} numberOfLines={1}>
               {syncing
                 ? 'Syncing live with directstay.online...'
                 : lastSyncedAt
-                ? `Live • Synced ${lastSyncedAt} • ${session.username}`
-                : `Live Admin • ${session.username}`}
+                ? `${activeMeta?.label || 'Admin'} • Synced ${lastSyncedAt}`
+                : `${activeMeta?.label || 'Admin'} • ${session.username}`}
             </Text>
           </View>
         </View>
 
         <View style={styles.headerActions}>
-          <TouchableOpacity onPress={refreshLiveState} style={styles.iconBtn}>
-            <RefreshCw size={17} color={COLORS.goldBright} />
+          {/* Top Notification Bell (Instant Checkout -> Dirty Room Alert for Housekeeping!) */}
+          <TouchableOpacity
+            onPress={() => setActiveModule('notifications')}
+            style={styles.iconBtn}
+          >
+            <Bell size={17} color={COLORS.goldBright} />
+            {totalBellAlerts > 0 && (
+              <View style={styles.bellBadge}>
+                <Text style={styles.bellBadgeText}>
+                  {totalBellAlerts > 99 ? '99+' : totalBellAlerts}
+                </Text>
+              </View>
+            )}
           </TouchableOpacity>
+
+          <TouchableOpacity onPress={refreshLiveState} style={styles.iconBtn}>
+            <RefreshCw size={16} color={COLORS.goldBright} />
+          </TouchableOpacity>
+
           <TouchableOpacity onPress={logout} style={styles.iconBtn}>
-            <LogOut size={17} color="#FDA4AF" />
+            <LogOut size={16} color="#FDA4AF" />
           </TouchableOpacity>
         </View>
       </View>
 
-      {/* Active Screen Content */}
+      {/* Active Screen Content (All 15 /admin Sidebar Modules!) */}
       <View style={styles.body}>
-        {activeTab === 'dashboard' && <DashboardScreen onNavigateTab={setActiveTab} />}
-        {activeTab === 'frontDesk' && <FrontDeskScreen />}
-        {activeTab === 'rooms' && <RoomsScreen />}
-        {activeTab === 'invoices' && <InvoicesScreen />}
-        {activeTab === 'operations' && <OperationsScreen />}
+        {activeModule === 'dashboard' && (
+          <DashboardScreen onNavigateModule={setActiveModule} />
+        )}
+        {activeModule === 'frontDesk' && <FrontDeskScreen />}
+        {activeModule === 'rooms' && <RoomsScreen />}
+        {activeModule === 'invoice' && <InvoicesScreen />}
+        {(activeModule === 'housekeeping' ||
+          activeModule === 'pos' ||
+          activeModule === 'inventory' ||
+          activeModule === 'otaManager') && (
+          <ServiceStoreModulesScreen moduleId={activeModule} />
+        )}
+        {(activeModule === 'staff' ||
+          activeModule === 'userList' ||
+          activeModule === 'finance' ||
+          activeModule === 'reports' ||
+          activeModule === 'auditLogs' ||
+          activeModule === 'notifications' ||
+          activeModule === 'profile') && (
+          <FinanceGovernanceModulesScreen moduleId={activeModule} />
+        )}
       </View>
 
-      {/* Bottom Navigation Bar (`nav bar bottom mei`) */}
+      {/* Bottom Navigation Bar with Safe Area Inset */}
       <BottomTabBar
-        activeTab={activeTab}
-        onSelectTab={setActiveTab}
+        activeModule={activeModule}
+        onSelectModule={setActiveModule}
+        onOpenDrawer={() => setDrawerOpen(true)}
         dirtyCount={dirtyRoomsCount}
         unpaidCount={unpaidInvoicesCount}
+        alertCount={totalBellAlerts}
       />
-    </SafeAreaView>
+
+      {/* Left-Side ☰ Menu Drawer with All 15 /admin Sidebar Modules */}
+      <ModulesDrawerModal
+        visible={drawerOpen}
+        activeModule={activeModule}
+        hotelName={hotelProfile?.name || 'DirectStay Admin'}
+        username={session.username}
+        badges={moduleBadges}
+        onSelectModule={setActiveModule}
+        onClose={() => setDrawerOpen(false)}
+        onLogout={logout}
+      />
+    </View>
   );
 };
 
 export default function App() {
   return (
-    <PmsProvider>
-      <StatusBar style="light" backgroundColor={COLORS.espresso} />
-      <AdminMobileShell />
-    </PmsProvider>
+    <SafeAreaProvider>
+      <PmsProvider>
+        <StatusBar style="light" backgroundColor={COLORS.espresso} />
+        <AdminMobileShell />
+      </PmsProvider>
+    </SafeAreaProvider>
   );
 }
 
@@ -129,12 +197,11 @@ const styles = StyleSheet.create({
   safeRoot: {
     flex: 1,
     backgroundColor: COLORS.espresso,
-    paddingTop: Platform.OS === 'android' ? RNStatusBar.currentHeight || 0 : 0,
   },
   topHeader: {
     backgroundColor: COLORS.espresso,
-    paddingHorizontal: 14,
-    paddingVertical: 11,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -148,13 +215,14 @@ const styles = StyleSheet.create({
     gap: 10,
     marginRight: 8,
   },
-  logoBadge: {
-    width: 34,
-    height: 34,
+  menuBtn: {
+    width: 36,
+    height: 36,
     borderRadius: 10,
     backgroundColor: COLORS.gold,
     alignItems: 'center',
     justifyContent: 'center',
+    flexShrink: 0,
   },
   hotelTitle: {
     color: '#FFFFFF',
@@ -170,7 +238,8 @@ const styles = StyleSheet.create({
   headerActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 7,
+    flexShrink: 0,
   },
   iconBtn: {
     width: 34,
@@ -181,6 +250,24 @@ const styles = StyleSheet.create({
     borderColor: COLORS.espressoBorder,
     alignItems: 'center',
     justifyContent: 'center',
+    position: 'relative',
+  },
+  bellBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -5,
+    minWidth: 16,
+    height: 16,
+    paddingHorizontal: 4,
+    borderRadius: 8,
+    backgroundColor: COLORS.rose,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bellBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 8.5,
+    fontWeight: '900',
   },
   body: {
     flex: 1,

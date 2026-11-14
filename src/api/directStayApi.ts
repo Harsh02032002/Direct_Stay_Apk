@@ -45,10 +45,6 @@ export interface LoginApiResult {
   error?: string;
 }
 
-/**
- * Authenticates strictly against the Live DirectStay /admin portal endpoint:
- * POST https://directstay.online/api/auth/login (portalMode: 'admin')
- */
 export async function loginHotelAdminApi(
   usernameInput: string,
   passwordInput: string,
@@ -98,11 +94,11 @@ export async function loginHotelAdminApi(
       };
     }
 
-    // Strict /admin Panel Enforcement: Block SaaS SuperAdmin on Hotel Admin Mobile App
     if (String(data.role).toLowerCase() === 'superadmin') {
       return {
         ok: false,
-        error: 'Super Admin credentials must use the web Super Admin Hub. Sign in with a Hotel Admin or Staff account.',
+        error:
+          'Super Admin credentials must use the web Super Admin Hub. Sign in with a Hotel Admin or Staff account.',
       };
     }
 
@@ -143,9 +139,6 @@ export async function logoutHotelAdminApi(
   await clearAdminSession();
 }
 
-/**
- * Fetches live hotel tenant state from GET https://directstay.online/api/db/state
- */
 export async function fetchLiveHotelStateApi(
   session: AdminSession,
   apiBaseUrl: string = LIVE_API_BASE_URL
@@ -177,9 +170,26 @@ export async function fetchLiveHotelStateApi(
       invoices: byHotel(raw.invoices),
       posItems: byHotel(raw.posItems),
       posOrders: byHotel(raw.posOrders),
+      posAdvanceBookings: byHotel(raw.posAdvanceBookings),
       cleaningLogs: byHotel(raw.cleaningLogs),
+      laundryOrders: byHotel(raw.laundryOrders),
+      lostAndFound: byHotel(raw.lostAndFound || raw.lostAndFoundItems),
+      inventoryProducts: byHotel(raw.inventoryProducts),
+      inventoryPurchases: byHotel(raw.inventoryPurchases),
+      vendors: byHotel(raw.vendors || raw.inventorySuppliers),
+      otaChannels: byHotel(raw.otaChannels),
+      travelAgents: byHotel(raw.travelAgents),
       expenses: byHotel(raw.expenses),
+      pettyCash: byHotel(raw.pettyCash),
+      cashBankAccounts: byHotel(raw.cashBankAccounts),
+      vouchers: byHotel(raw.vouchers || raw.financeVouchers),
+      ownerPayments: byHotel(raw.ownerPayments),
+      reimbursements: byHotel(raw.reimbursements),
+      dailyClosings: byHotel(raw.dailyClosings),
+      waterBottles: byHotel(raw.waterBottles),
       staff: byHotel(raw.staff),
+      auditLogs: byHotel(raw.auditLogs),
+      notifications: byHotel(raw.notifications),
     };
 
     return { ok: true, data: snapshot };
@@ -188,9 +198,6 @@ export async function fetchLiveHotelStateApi(
   }
 }
 
-/**
- * Persists partial PMS collection updates to POST https://directstay.online/api/pms-data
- */
 export async function syncLiveHotelDataApi(
   session: AdminSession,
   partialData: Partial<PmsStateSnapshot> & Record<string, any>,
@@ -212,9 +219,6 @@ export async function syncLiveHotelDataApi(
   }
 }
 
-/**
- * Calls POST https://directstay.online/api/invoices/generate (supports official & separate invoices)
- */
 export async function generateLiveInvoiceApi(
   session: AdminSession,
   payload: Record<string, any>,
@@ -231,7 +235,10 @@ export async function generateLiveInvoiceApi(
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok || json?.success === false) {
-      return { ok: false, error: json?.error || json?.blockedReason || 'Invoice generation failed' };
+      return {
+        ok: false,
+        error: json?.error || json?.blockedReason || 'Invoice generation failed',
+      };
     }
     return { ok: true, invoice: json.invoice };
   } catch (err: any) {

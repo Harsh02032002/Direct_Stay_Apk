@@ -9,10 +9,12 @@ import {
   Alert,
   StyleSheet,
 } from 'react-native';
-import { FilePlus2, Lock, Share2, X } from 'lucide-react-native';
+import { FilePlus2, Lock, Share2, X, CheckSquare, Square } from 'lucide-react-native';
 import { usePms } from '../context/PmsContext';
 import { COLORS } from '../theme/colors';
 import { Invoice } from '../types/pms';
+import { SubTabStrip } from '../components/SubTabStrip';
+import { DateFilterBar, matchesQuickDateFilter, QuickDateFilter } from '../components/DateFilterBar';
 
 function isInvoiceLockedNoGst(inv: Invoice): boolean {
   return (
@@ -24,18 +26,23 @@ function isInvoiceLockedNoGst(inv: Invoice): boolean {
 
 export const InvoicesScreen: React.FC = () => {
   const { state, hotelProfile, generateSeparateOrNewInvoice } = usePms();
+  const defaultGst =
+    Number(hotelProfile?.defaultGstRate) > 0 ? Number(hotelProfile?.defaultGstRate) : 5;
+
+  const [subTab, setSubTab] = useState<'all' | 'gst' | 'nogst' | 'unpaid'>('all');
+  const [dateFilter, setDateFilter] = useState<QuickDateFilter>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+
   const [viewingInvoice, setViewingInvoice] = useState<Invoice | null>(null);
   const [generatorOpen, setGeneratorOpen] = useState(false);
   const [selectedBookingId, setSelectedBookingId] = useState(state.bookings[0]?.id || '');
   const [genWithGst, setGenWithGst] = useState(true);
-  const [genGstRate, setGenGstRate] = useState(5);
   const [genIncludeServices, setGenIncludeServices] = useState(true);
   const [generating, setGenerating] = useState(false);
 
   const openGeneratorForBooking = (bookingId: string, defaultWithGst: boolean) => {
     setSelectedBookingId(bookingId);
     setGenWithGst(defaultWithGst);
-    setGenGstRate(5);
     setGeneratorOpen(true);
   };
 
@@ -43,7 +50,7 @@ export const InvoicesScreen: React.FC = () => {
     const noGst = isInvoiceLockedNoGst(inv);
     const msg =
       `*${hotelProfile?.name || 'DirectStay Hotel'}*\n` +
-      `${noGst ? 'ROOM BILL (NO GST)' : `TAX INVOICE (${inv.gstRate || 5}% GST)`}\n` +
+      `${noGst ? 'ROOM BILL (NO GST)' : `TAX INVOICE (${inv.gstRate || defaultGst}% GST)`}\n` +
       `Invoice No: ${inv.invoiceNumber || inv.id}\n` +
       `Guest: ${inv.guestName} (Room ${inv.roomNumber})\n` +
       `Stay: ${inv.checkInDate} to ${inv.checkOutDate}\n` +
@@ -54,14 +61,61 @@ export const InvoicesScreen: React.FC = () => {
     await Share.share({ message: msg });
   };
 
+  const filteredInvoices = state.invoices.filter((inv) => {
+    const noGst = isInvoiceLockedNoGst(inv);
+    if (subTab === 'gst' && noGst) return false;
+    if (subTab === 'nogst' && !noGst) return false;
+    if (subTab === 'unpaid' && inv.isPaid) return false;
+    if (!matchesQuickDateFilter(inv.dateCreated || inv.date || inv.checkOutDate, dateFilter)) {
+      return false;
+    }
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      const hay = `${inv.invoiceNumber} ${inv.guestName} ${inv.roomNumber}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
   return (
     <View style={styles.root}>
+      <SubTabStrip
+        activeId={subTab}
+        onSelect={(id) => setSubTab(id as any)}
+        tabs={[
+          { id: 'all', label: 'All Bills', count: state.invoices.length },
+          {
+            id: 'gst',
+            label: 'GST Invoices',
+            count: state.invoices.filter((i) => !isInvoiceLockedNoGst(i)).length,
+          },
+          {
+            id: 'nogst',
+            label: 'Without GST',
+            count: state.invoices.filter((i) => isInvoiceLockedNoGst(i)).length,
+          },
+          {
+            id: 'unpaid',
+            label: 'Balance Due',
+            count: state.invoices.filter((i) => !i.isPaid).length,
+          },
+        ]}
+      />
+
+      <DateFilterBar
+        activeFilter={dateFilter}
+        onChangeFilter={setDateFilter}
+        searchQuery={searchQuery}
+        onChangeSearch={setSearchQuery}
+        searchPlaceholder="Search invoice no, guest, room..."
+      />
+
       {/* Top Generator Strip */}
       <View style={styles.topStrip}>
         <View style={{ flex: 1 }}>
-          <Text style={styles.stripTitle}>GST & Room Bills ({state.invoices.length})</Text>
+          <Text style={styles.stripTitle}>Official Invoices ({filteredInvoices.length})</Text>
           <Text style={styles.stripSub}>
-            Generated invoices lock GST mode permanently. Use + Separate Invoice for another GST mode.
+            GST mode locks once generated. Tap + Separate for an alternate bill.
           </Text>
         </View>
         <TouchableOpacity
@@ -73,22 +127,22 @@ export const InvoicesScreen: React.FC = () => {
           }}
           style={styles.newInvBtn}
         >
-          <FilePlus2 size={15} color={COLORS.espresso} />
-          <Text style={styles.newInvBtnText}>+ New / Separate</Text>
+          <FilePlus2 size={14} color={COLORS.espresso} />
+          <Text style={styles.newInvBtnText}>+ Separate Bill</Text>
         </TouchableOpacity>
       </View>
 
       {/* Invoices List */}
       <ScrollView contentContainerStyle={styles.list}>
-        {state.invoices.length === 0 ? (
+        {filteredInvoices.length === 0 ? (
           <View style={styles.emptyBox}>
-            <Text style={styles.emptyTitle}>No Generated Invoices Yet</Text>
+            <Text style={styles.emptyTitle}>No Matching Invoices</Text>
             <Text style={styles.emptySub}>
-              Tap "+ New / Separate" above to generate an official With-GST or No-GST invoice for any booking.
+              Switch filter to "All Records" or tap "+ Separate Bill" to generate one.
             </Text>
           </View>
         ) : (
-          state.invoices.map((inv) => {
+          filteredInvoices.map((inv) => {
             const noGst = isInvoiceLockedNoGst(inv);
             return (
               <TouchableOpacity
@@ -98,8 +152,10 @@ export const InvoicesScreen: React.FC = () => {
                 style={styles.invCard}
               >
                 <View style={styles.invRowTop}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                    <Text style={styles.invNo}>{inv.invoiceNumber || inv.id}</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
+                    <Text style={styles.invNo} numberOfLines={1}>
+                      {inv.invoiceNumber || inv.id}
+                    </Text>
                     {inv.isSeparateInvoice && (
                       <View style={styles.sepBadge}>
                         <Text style={styles.sepBadgeText}>SEPARATE</Text>
@@ -111,7 +167,7 @@ export const InvoicesScreen: React.FC = () => {
                   </Text>
                 </View>
 
-                <Text style={styles.invGuest}>
+                <Text style={styles.invGuest} numberOfLines={1}>
                   {inv.guestName} • Room {inv.roomNumber}
                 </Text>
                 <Text style={styles.invDates}>
@@ -119,7 +175,6 @@ export const InvoicesScreen: React.FC = () => {
                 </Text>
 
                 <View style={styles.invFooter}>
-                  {/* Strictly Locked GST / No-GST Badge */}
                   <View
                     style={[
                       styles.lockBadge,
@@ -135,7 +190,7 @@ export const InvoicesScreen: React.FC = () => {
                     >
                       {noGst
                         ? 'Locked: No GST (0%)'
-                        : `Locked: With GST (${inv.gstRate || 5}%)`}
+                        : `Locked: GST (${inv.gstRate || defaultGst}%)`}
                     </Text>
                   </View>
 
@@ -153,123 +208,129 @@ export const InvoicesScreen: React.FC = () => {
         )}
       </ScrollView>
 
-      {/* Invoice Preview Modal (Strictly Immutable GST Mode — Zero Edit Toggles!) */}
+      {/* Invoice Preview Modal */}
       <Modal visible={Boolean(viewingInvoice)} transparent animationType="slide">
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
-            {viewingInvoice && (() => {
-              const noGst = isInvoiceLockedNoGst(viewingInvoice);
-              return (
-                <>
-                  <View style={styles.previewTopBar}>
-                    <View
-                      style={[
-                        styles.lockBadge,
-                        { backgroundColor: noGst ? COLORS.amberSoft : COLORS.emeraldSoft },
-                      ]}
-                    >
-                      <Lock size={12} color={noGst ? COLORS.amber : COLORS.emerald} />
-                      <Text
+            {viewingInvoice &&
+              (() => {
+                const noGst = isInvoiceLockedNoGst(viewingInvoice);
+                return (
+                  <>
+                    <View style={styles.previewTopBar}>
+                      <View
                         style={[
-                          styles.lockBadgeText,
-                          { color: noGst ? COLORS.amber : COLORS.emerald },
+                          styles.lockBadge,
+                          { backgroundColor: noGst ? COLORS.amberSoft : COLORS.emeraldSoft },
                         ]}
                       >
-                        {noGst
-                          ? 'Locked: No GST (0% Room Bill)'
-                          : `Locked: With GST (${viewingInvoice.gstRate || 5}%)`}
-                      </Text>
-                    </View>
-                    <TouchableOpacity onPress={() => setViewingInvoice(null)}>
-                      <X size={20} color={COLORS.textSecondary} />
-                    </TouchableOpacity>
-                  </View>
-
-                  {/* Classic Espresso & Gold Invoice Sheet */}
-                  <View style={styles.espressoSheetHeader}>
-                    <Text style={styles.sheetHotelName}>
-                      {hotelProfile?.name || 'DIRECTSTAY HOTEL'}
-                    </Text>
-                    {!noGst && hotelProfile?.gstNumber ? (
-                      <Text style={styles.sheetGstin}>GSTIN: {hotelProfile.gstNumber}</Text>
-                    ) : null}
-                    <Text style={styles.sheetInvNum}>
-                      {noGst ? 'ROOM BILL' : 'TAX INVOICE'} • {viewingInvoice.invoiceNumber || viewingInvoice.id}
-                    </Text>
-                  </View>
-
-                  <View style={styles.sheetBody}>
-                    <View style={styles.lineRow}>
-                      <Text style={styles.lineLabel}>Guest Name:</Text>
-                      <Text style={styles.lineVal}>{viewingInvoice.guestName}</Text>
-                    </View>
-                    <View style={styles.lineRow}>
-                      <Text style={styles.lineLabel}>Room & Dates:</Text>
-                      <Text style={styles.lineVal}>
-                        Rm {viewingInvoice.roomNumber} ({viewingInvoice.checkInDate} → {viewingInvoice.checkOutDate})
-                      </Text>
-                    </View>
-                    <View style={styles.lineRow}>
-                      <Text style={styles.lineLabel}>Room Charges:</Text>
-                      <Text style={styles.lineVal}>
-                        ₹{Number(viewingInvoice.roomCharges || 0).toLocaleString('en-IN')}
-                      </Text>
-                    </View>
-                    {Number(viewingInvoice.foodCharges || 0) + Number(viewingInvoice.otherCharges || 0) > 0 && (
-                      <View style={styles.lineRow}>
-                        <Text style={styles.lineLabel}>POS / Extra Services:</Text>
-                        <Text style={styles.lineVal}>
-                          ₹
-                          {(
-                            Number(viewingInvoice.foodCharges || 0) +
-                            Number(viewingInvoice.otherCharges || 0)
-                          ).toLocaleString('en-IN')}
+                        <Lock size={12} color={noGst ? COLORS.amber : COLORS.emerald} />
+                        <Text
+                          style={[
+                            styles.lockBadgeText,
+                            { color: noGst ? COLORS.amber : COLORS.emerald },
+                          ]}
+                        >
+                          {noGst
+                            ? 'Locked: No GST (0% Room Bill)'
+                            : `Locked: With GST (${viewingInvoice.gstRate || defaultGst}%)`}
                         </Text>
                       </View>
-                    )}
-                    {!noGst && (
-                      <View style={styles.lineRow}>
-                        <Text style={styles.lineLabel}>
-                          CGST + SGST ({viewingInvoice.gstRate || 5}%):
-                        </Text>
-                        <Text style={styles.lineVal}>
-                          ₹{Number(viewingInvoice.gst || 0).toLocaleString('en-IN')}
-                        </Text>
-                      </View>
-                    )}
-                    <View style={[styles.lineRow, styles.grandRow]}>
-                      <Text style={styles.grandLabel}>GRAND TOTAL</Text>
-                      <Text style={styles.grandVal}>
-                        ₹{Number(viewingInvoice.finalAmount || 0).toLocaleString('en-IN')}
+                      <TouchableOpacity onPress={() => setViewingInvoice(null)}>
+                        <X size={20} color={COLORS.textSecondary} />
+                      </TouchableOpacity>
+                    </View>
+
+                    <View style={styles.espressoSheetHeader}>
+                      <Text style={styles.sheetHotelName}>
+                        {hotelProfile?.name || 'DIRECTSTAY HOTEL'}
+                      </Text>
+                      {!noGst && hotelProfile?.gstNumber ? (
+                        <Text style={styles.sheetGstin}>GSTIN: {hotelProfile.gstNumber}</Text>
+                      ) : null}
+                      <Text style={styles.sheetInvNum}>
+                        {noGst ? 'ROOM BILL' : 'TAX INVOICE'} •{' '}
+                        {viewingInvoice.invoiceNumber || viewingInvoice.id}
                       </Text>
                     </View>
-                  </View>
 
-                  <View style={styles.previewActions}>
-                    <TouchableOpacity
-                      onPress={() => {
-                        const bId = viewingInvoice.bookingId;
-                        setViewingInvoice(null);
-                        openGeneratorForBooking(bId, noGst);
-                      }}
-                      style={styles.separateModalBtn}
-                    >
-                      <FilePlus2 size={15} color={COLORS.indigo} />
-                      <Text style={styles.separateModalBtnText}>
-                        + Separate ({noGst ? 'With GST' : 'No GST'})
-                      </Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      onPress={() => handleShareInvoice(viewingInvoice)}
-                      style={styles.shareBtn}
-                    >
-                      <Share2 size={15} color={COLORS.goldBright} />
-                      <Text style={styles.shareBtnText}>Share / WhatsApp</Text>
-                    </TouchableOpacity>
-                  </View>
-                </>
-              );
-            })()}
+                    <View style={styles.sheetBody}>
+                      <View style={styles.lineRow}>
+                        <Text style={styles.lineLabel}>Guest Name:</Text>
+                        <Text style={styles.lineVal}>{viewingInvoice.guestName}</Text>
+                      </View>
+                      <View style={styles.lineRow}>
+                        <Text style={styles.lineLabel}>Room & Dates:</Text>
+                        <Text style={styles.lineVal}>
+                          Rm {viewingInvoice.roomNumber} ({viewingInvoice.checkInDate} →{' '}
+                          {viewingInvoice.checkOutDate})
+                        </Text>
+                      </View>
+                      <View style={styles.lineRow}>
+                        <Text style={styles.lineLabel}>Room Charges:</Text>
+                        <Text style={styles.lineVal}>
+                          ₹{Number(viewingInvoice.roomCharges || 0).toLocaleString('en-IN')}
+                        </Text>
+                      </View>
+                      {Number(viewingInvoice.foodCharges || 0) +
+                        Number(viewingInvoice.otherCharges || 0) >
+                        0 && (
+                        <View style={styles.lineRow}>
+                          <Text style={styles.lineLabel}>POS / Extra Services:</Text>
+                          <Text style={styles.lineVal}>
+                            ₹
+                            {(
+                              Number(viewingInvoice.foodCharges || 0) +
+                              Number(viewingInvoice.otherCharges || 0)
+                            ).toLocaleString('en-IN')}
+                          </Text>
+                        </View>
+                      )}
+                      {!noGst && (
+                        <View style={styles.lineRow}>
+                          <Text style={styles.lineLabel}>
+                            CGST + SGST ({viewingInvoice.gstRate || defaultGst}%):
+                          </Text>
+                          <Text style={styles.lineVal}>
+                            ₹{Number(viewingInvoice.gst || 0).toLocaleString('en-IN')}
+                          </Text>
+                        </View>
+                      )}
+                      <View style={[styles.lineRow, styles.grandRow]}>
+                        <Text style={styles.grandLabel}>GRAND TOTAL</Text>
+                        <Text style={styles.grandVal}>
+                          ₹{Number(viewingInvoice.finalAmount || 0).toLocaleString('en-IN')}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.previewActions}>
+                      <TouchableOpacity
+                        onPress={() => {
+                          const bId = viewingInvoice.bookingId;
+                          setViewingInvoice(null);
+                          openGeneratorForBooking(bId, noGst);
+                        }}
+                        style={styles.separateModalBtn}
+                      >
+                        <FilePlus2 size={15} color={COLORS.indigo} />
+                        <Text style={styles.separateModalBtnText} numberOfLines={1}>
+                          + Separate ({noGst ? 'With GST' : 'No GST'})
+                        </Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => handleShareInvoice(viewingInvoice)}
+                        style={styles.shareBtn}
+                      >
+                        <Share2 size={15} color={COLORS.goldBright} />
+                        <Text style={styles.shareBtnText} numberOfLines={1}>
+                          Share / WhatsApp
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  </>
+                );
+              })()}
           </View>
         </View>
       </Modal>
@@ -285,10 +346,12 @@ export const InvoicesScreen: React.FC = () => {
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.genSub}>
-              1. Select Booking Folio:
-            </Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
+            <Text style={styles.genSub}>1. Select Booking Folio:</Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={{ marginBottom: 12 }}
+            >
               <View style={{ flexDirection: 'row', gap: 8 }}>
                 {state.bookings.map((b) => {
                   const sel = selectedBookingId === b.id;
@@ -310,62 +373,42 @@ export const InvoicesScreen: React.FC = () => {
             {state.invoices.some((i) => i.bookingId === selectedBookingId) && (
               <View style={styles.infoNotice}>
                 <Text style={styles.infoNoticeText}>
-                  🔒 Existing invoice(s) for this booking stay 100% untouched. A brand-new Separate Invoice with a unique Invoice Number will be created!
+                  🔒 Existing invoice stays untouched. A new Separate Invoice with a unique number
+                  will be created.
                 </Text>
               </View>
             )}
 
-            <Text style={styles.genSub}>2. Select Tax Mode (Locked Once Generated):</Text>
-            <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
-              <TouchableOpacity
-                onPress={() => setGenWithGst(true)}
-                style={[
-                  styles.modeBtn,
-                  genWithGst && { backgroundColor: COLORS.emerald, borderColor: COLORS.emerald },
-                ]}
-              >
-                <Text style={[styles.modeBtnText, genWithGst && { color: '#FFF' }]}>
-                  With GST ({genGstRate}%)
+            <TouchableOpacity
+              onPress={() => setGenWithGst((p) => !p)}
+              style={[
+                styles.gstCheckRow,
+                genWithGst && { borderColor: COLORS.emerald, backgroundColor: COLORS.emeraldSoft },
+              ]}
+            >
+              {genWithGst ? (
+                <CheckSquare size={18} color={COLORS.emerald} />
+              ) : (
+                <Square size={18} color={COLORS.textSecondary} />
+              )}
+              <View style={{ flex: 1 }}>
+                <Text style={styles.gstCheckTitle}>
+                  GST Invoice ({genWithGst ? `${defaultGst}% GST Applied` : 'Unchecked — 0% No GST'})
                 </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => setGenWithGst(false)}
-                style={[
-                  styles.modeBtn,
-                  !genWithGst && { backgroundColor: COLORS.amber, borderColor: COLORS.amber },
-                ]}
-              >
-                <Text style={[styles.modeBtnText, !genWithGst && { color: '#FFF' }]}>
-                  No GST (0% Bill)
+                <Text style={styles.gstCheckSub}>
+                  GST % slab is configured in My Profile & Settings
                 </Text>
-              </TouchableOpacity>
-            </View>
-
-            {genWithGst && (
-              <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
-                {[5, 12, 18].map((s) => (
-                  <TouchableOpacity
-                    key={s}
-                    onPress={() => setGenGstRate(s)}
-                    style={[
-                      styles.modeBtn,
-                      genGstRate === s && { backgroundColor: COLORS.gold, borderColor: COLORS.goldDark },
-                    ]}
-                  >
-                    <Text style={[styles.modeBtnText, genGstRate === s && { color: COLORS.espresso }]}>
-                      {s}% GST
-                    </Text>
-                  </TouchableOpacity>
-                ))}
               </View>
-            )}
+            </TouchableOpacity>
 
             <TouchableOpacity
               onPress={() => setGenIncludeServices((p) => !p)}
               style={[styles.scopeToggle, genIncludeServices && { borderColor: COLORS.gold }]}
             >
               <Text style={styles.scopeToggleText}>
-                Scope: {genIncludeServices ? 'Booking + POS / Extra Services' : 'Only Room Booking'} (Tap to switch)
+                Scope:{' '}
+                {genIncludeServices ? 'Booking + POS / Extra Services' : 'Only Room Booking'} (Tap
+                to switch)
               </Text>
             </TouchableOpacity>
 
@@ -376,7 +419,7 @@ export const InvoicesScreen: React.FC = () => {
                 const res = await generateSeparateOrNewInvoice({
                   bookingId: selectedBookingId,
                   withGst: genWithGst,
-                  gstRate: genGstRate,
+                  gstRate: defaultGst,
                   includeServices: genIncludeServices,
                 });
                 setGenerating(false);
@@ -392,7 +435,7 @@ export const InvoicesScreen: React.FC = () => {
               <Text style={styles.generateConfirmText}>
                 {generating
                   ? 'Generating & Syncing...'
-                  : `Generate ${genWithGst ? `With GST (${genGstRate}%)` : 'No GST (0%)'} Invoice`}
+                  : `Generate ${genWithGst ? `GST (${defaultGst}%)` : 'Without GST'} Invoice`}
               </Text>
             </TouchableOpacity>
           </View>
@@ -406,15 +449,16 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: COLORS.bg },
   topStrip: {
     backgroundColor: '#FFFFFF',
-    padding: 13,
+    paddingHorizontal: 13,
+    paddingVertical: 11,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
   },
-  stripTitle: { fontSize: 14.5, fontWeight: '800', color: COLORS.textPrimary },
-  stripSub: { fontSize: 10.5, color: COLORS.textSecondary, marginTop: 2 },
+  stripTitle: { fontSize: 13.5, fontWeight: '800', color: COLORS.textPrimary },
+  stripSub: { fontSize: 10.5, color: COLORS.textSecondary, marginTop: 1 },
   newInvBtn: {
     backgroundColor: COLORS.gold,
     paddingHorizontal: 12,
@@ -423,19 +467,25 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
+    flexShrink: 0,
   },
   newInvBtnText: { fontSize: 11.5, fontWeight: '800', color: COLORS.espresso },
-  list: { padding: 12, gap: 10, paddingBottom: 30 },
+  list: { padding: 12, gap: 10, paddingBottom: 28 },
   emptyBox: {
     backgroundColor: '#FFFFFF',
     borderRadius: 16,
-    padding: 22,
+    padding: 20,
     alignItems: 'center',
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-  emptyTitle: { fontSize: 14.5, fontWeight: '800', color: COLORS.textPrimary, marginBottom: 4 },
-  emptySub: { fontSize: 12, color: COLORS.textSecondary, textAlign: 'center' },
+  emptyTitle: { fontSize: 14.5, fontWeight: '800', color: COLORS.textPrimary },
+  emptySub: {
+    fontSize: 12,
+    color: COLORS.textSecondary,
+    textAlign: 'center',
+    marginTop: 4,
+  },
   invCard: {
     backgroundColor: '#FFFFFF',
     borderRadius: 16,
@@ -443,22 +493,29 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-  invRowTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  invNo: { fontSize: 13.5, fontWeight: '800', color: COLORS.textPrimary },
+  invRowTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
+  },
+  invNo: { fontSize: 13.5, fontWeight: '900', color: COLORS.textPrimary },
   sepBadge: {
     backgroundColor: COLORS.indigoSoft,
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 5,
   },
-  sepBadgeText: { fontSize: 9, fontWeight: '800', color: COLORS.indigo },
-  invTotal: { fontSize: 15, fontWeight: '900', color: COLORS.emerald },
-  invGuest: { fontSize: 12.5, fontWeight: '700', color: COLORS.textPrimary, marginTop: 4 },
-  invDates: { fontSize: 11, color: COLORS.textSecondary, marginTop: 2 },
+  sepBadgeText: { fontSize: 9, fontWeight: '900', color: COLORS.indigo },
+  invTotal: { fontSize: 15.5, fontWeight: '900', color: COLORS.goldDark },
+  invGuest: { fontSize: 13, fontWeight: '700', color: COLORS.textPrimary, marginTop: 4 },
+  invDates: { fontSize: 11.5, color: COLORS.textSecondary, marginTop: 2 },
   invFooter: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 8,
     marginTop: 10,
     paddingTop: 9,
     borderTopWidth: 1,
@@ -477,15 +534,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    paddingHorizontal: 9,
-    paddingVertical: 5,
-    borderRadius: 8,
     backgroundColor: COLORS.indigoSoft,
+    paddingHorizontal: 10,
+    paddingVertical: 5.5,
+    borderRadius: 8,
   },
-  sepActionText: { fontSize: 10.5, fontWeight: '800', color: COLORS.indigo },
+  sepActionText: { fontSize: 11, fontWeight: '800', color: COLORS.indigo },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.65)',
+    backgroundColor: 'rgba(15, 11, 9, 0.65)',
     justifyContent: 'flex-end',
   },
   modalCard: {
@@ -493,6 +550,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     padding: 18,
+    paddingBottom: 28,
   },
   previewTopBar: {
     flexDirection: 'row',
@@ -502,26 +560,24 @@ const styles = StyleSheet.create({
   },
   espressoSheetHeader: {
     backgroundColor: COLORS.espresso,
+    borderRadius: 15,
     padding: 14,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: COLORS.gold,
+    marginBottom: 12,
   },
-  sheetHotelName: { color: '#FFFFFF', fontSize: 15, fontWeight: '800' },
-  sheetGstin: { color: COLORS.goldBright, fontSize: 11, fontWeight: '700', marginTop: 2 },
-  sheetInvNum: { color: '#E2E8F0', fontSize: 11.5, fontWeight: '700', marginTop: 5 },
+  sheetHotelName: { color: COLORS.goldBright, fontSize: 15, fontWeight: '900' },
+  sheetGstin: { color: '#D6C9BE', fontSize: 11, marginTop: 2 },
+  sheetInvNum: { color: '#FFFFFF', fontSize: 12, fontWeight: '700', marginTop: 4 },
   sheetBody: {
-    marginTop: 12,
-    backgroundColor: '#FAFBFD',
+    backgroundColor: '#FAF8F5',
     borderRadius: 14,
     padding: 13,
+    gap: 8,
     borderWidth: 1,
     borderColor: COLORS.border,
-    gap: 7,
   },
-  lineRow: { flexDirection: 'row', justifyContent: 'space-between' },
+  lineRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
   lineLabel: { fontSize: 12, color: COLORS.textSecondary, fontWeight: '600' },
-  lineVal: { fontSize: 12, fontWeight: '800', color: COLORS.textPrimary },
+  lineVal: { fontSize: 12, color: COLORS.textPrimary, fontWeight: '800', flexShrink: 1 },
   grandRow: {
     borderTopWidth: 1,
     borderTopColor: COLORS.border,
@@ -529,24 +585,24 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   grandLabel: { fontSize: 13.5, fontWeight: '900', color: COLORS.espresso },
-  grandVal: { fontSize: 15, fontWeight: '900', color: COLORS.emerald },
+  grandVal: { fontSize: 15.5, fontWeight: '900', color: COLORS.goldDark },
   previewActions: { flexDirection: 'row', gap: 10, marginTop: 14 },
   separateModalBtn: {
     flex: 1,
-    height: 46,
+    minHeight: 45,
+    paddingHorizontal: 10,
     borderRadius: 12,
     backgroundColor: COLORS.indigoSoft,
-    borderWidth: 1,
-    borderColor: COLORS.indigoBorder,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
   },
-  separateModalBtnText: { fontSize: 12, fontWeight: '800', color: COLORS.indigo },
+  separateModalBtnText: { fontSize: 11.5, fontWeight: '800', color: COLORS.indigo },
   shareBtn: {
     flex: 1,
-    height: 46,
+    minHeight: 45,
+    paddingHorizontal: 10,
     borderRadius: 12,
     backgroundColor: COLORS.espresso,
     flexDirection: 'row',
@@ -555,50 +611,54 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   shareBtnText: { fontSize: 12, fontWeight: '800', color: COLORS.goldBright },
-  genTitle: { fontSize: 15.5, fontWeight: '800', color: COLORS.textPrimary },
-  genSub: { fontSize: 11.5, fontWeight: '700', color: COLORS.textSecondary, marginBottom: 6 },
+  genTitle: { fontSize: 15, fontWeight: '800', color: COLORS.textPrimary, flex: 1 },
+  genSub: { fontSize: 12, fontWeight: '700', color: COLORS.textSecondary, marginBottom: 7 },
   bkgChip: {
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 10,
+    backgroundColor: '#F1F5F9',
     borderWidth: 1,
     borderColor: COLORS.border,
-    backgroundColor: '#F8FAFC',
   },
   bkgChipSel: { backgroundColor: COLORS.espresso, borderColor: COLORS.gold },
   bkgChipText: { fontSize: 12, fontWeight: '700', color: COLORS.textPrimary },
   infoNotice: {
-    backgroundColor: COLORS.indigoSoft,
+    backgroundColor: COLORS.amberSoft,
     padding: 10,
     borderRadius: 10,
+    marginBottom: 12,
+  },
+  infoNoticeText: { fontSize: 11, color: COLORS.amber, fontWeight: '700' },
+  gstCheckRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: COLORS.border,
+    backgroundColor: '#FAF8F5',
     marginBottom: 10,
   },
-  infoNoticeText: { fontSize: 11, fontWeight: '700', color: COLORS.indigo },
-  modeBtn: {
-    flex: 1,
-    height: 42,
-    borderRadius: 11,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  modeBtnText: { fontSize: 12, fontWeight: '800', color: COLORS.textPrimary },
+  gstCheckTitle: { fontSize: 12.5, fontWeight: '800', color: COLORS.textPrimary },
+  gstCheckSub: { fontSize: 10.5, color: COLORS.textSecondary, marginTop: 1 },
   scopeToggle: {
     padding: 11,
     borderRadius: 11,
     borderWidth: 1,
     borderColor: COLORS.border,
     backgroundColor: '#F8FAFC',
-    marginBottom: 12,
+    marginBottom: 14,
   },
   scopeToggleText: { fontSize: 11.5, fontWeight: '700', color: COLORS.textPrimary },
   generateConfirmBtn: {
-    height: 48,
+    minHeight: 46,
     borderRadius: 13,
     backgroundColor: COLORS.espresso,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: 14,
   },
-  generateConfirmText: { color: COLORS.goldBright, fontSize: 13.5, fontWeight: '800' },
+  generateConfirmText: { fontSize: 13, fontWeight: '800', color: COLORS.goldBright },
 });
