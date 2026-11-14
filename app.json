@@ -31,6 +31,10 @@
         "android.permission.ACCESS_NETWORK_STATE"
       ]
     },
+    "web": {
+      "bundler": "metro",
+      "favicon": "./assets/icon.png"
+    },
     "extra": {
       "apiBaseUrl": "https://directstay.online"
     }

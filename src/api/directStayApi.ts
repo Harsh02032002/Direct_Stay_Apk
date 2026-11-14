@@ -25,16 +25,18 @@ export async function clearAdminSession(): Promise<void> {
   await AsyncStorage.removeItem(SESSION_STORAGE_KEY);
 }
 
-function buildAuthHeaders(session: AdminSession): Record<string, string> {
-  return {
-    'Content-Type': 'application/json',
+function buildAuthHeaders(session: AdminSession, includeJsonContentType = true): Record<string, string> {
+  const headers: Record<string, string> = {
     Accept: 'application/json',
     'x-session-token': session.token,
     'x-user-role': 'Admin',
     'x-hotel-id': session.hotelId,
-    'x-target-hotel-id': session.hotelId,
     'x-user-name': session.username || 'Admin',
   };
+  if (includeJsonContentType) {
+    headers['Content-Type'] = 'application/json';
+  }
+  return headers;
 }
 
 export interface LoginApiResult {
@@ -147,7 +149,7 @@ export async function fetchLiveHotelStateApi(
     const url = `${apiBaseUrl}/api/db/state?hotelId=${encodeURIComponent(session.hotelId)}&_t=${Date.now()}`;
     const res = await fetch(url, {
       method: 'GET',
-      headers: buildAuthHeaders(session),
+      headers: buildAuthHeaders(session, false),
     });
 
     if (res.status === 401) {
@@ -204,11 +206,14 @@ export async function syncLiveHotelDataApi(
   apiBaseUrl: string = LIVE_API_BASE_URL
 ): Promise<{ ok: boolean; error?: string }> {
   try {
-    const res = await fetch(`${apiBaseUrl}/api/pms-data`, {
-      method: 'POST',
-      headers: buildAuthHeaders(session),
-      body: JSON.stringify({ data: partialData }),
-    });
+    const res = await fetch(
+      `${apiBaseUrl}/api/pms-data?hotelId=${encodeURIComponent(session.hotelId)}`,
+      {
+        method: 'POST',
+        headers: buildAuthHeaders(session),
+        body: JSON.stringify({ hotelId: session.hotelId, data: partialData }),
+      }
+    );
     const json = await res.json().catch(() => ({}));
     if (!res.ok || json?.success === false) {
       return { ok: false, error: json?.error || `Sync failed (${res.status})` };
