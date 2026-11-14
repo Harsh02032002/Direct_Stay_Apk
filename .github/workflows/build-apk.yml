@@ -19,6 +19,10 @@ jobs:
     name: Build Signed Release & Debug APK
     runs-on: ubuntu-latest
 
+    env:
+      NODE_ENV: production
+      JAVA_OPTS: "-Xmx4096m"
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -35,8 +39,12 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Configure Preinstalled Android SDK Licenses
+        run: |
+          export ANDROID_SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
 
       - name: Setup Gradle Cache
         uses: gradle/actions/setup-gradle@v4
@@ -49,6 +57,7 @@ jobs:
           if [ ! -f "android/gradlew" ]; then
             CI=1 npx expo prebuild --platform android --no-install
           fi
+          echo "sdk.dir=${ANDROID_HOME}" > android/local.properties
           if [ ! -f "android/app/directstay-release.keystore" ]; then
             keytool -genkeypair -v -storetype PKCS12 \
               -keystore android/app/directstay-release.keystore \
@@ -60,15 +69,14 @@ jobs:
           sed -i 's/\r$//' android/gradlew
           chmod +x android/gradlew
 
-      - name: Build Signed Android Release & Debug APKs
+      - name: Build Signed Android Release APK
         working-directory: ./android
-        run: ./gradlew assembleRelease assembleDebug --no-daemon
+        run: ./gradlew assembleRelease --no-daemon -Dorg.gradle.jvmargs="-Xmx4096m -XX:MaxMetaspaceSize=1024m"
 
-      - name: Verify APK Signature & Package Integrity
+      - name: Prepare Signed APK Output
         run: |
           mkdir -p dist-apk
           cp android/app/build/outputs/apk/release/app-release.apk dist-apk/DirectStay-Admin.apk
-          cp android/app/build/outputs/apk/debug/app-debug.apk dist-apk/DirectStay-Admin-Debug.apk
           ls -lh dist-apk/
 
       - name: Upload DirectStay Admin Signed APK Artifact
@@ -88,4 +96,3 @@ jobs:
           prerelease: false
           files: |
             dist-apk/DirectStay-Admin.apk
-            dist-apk/DirectStay-Admin-Debug.apk
