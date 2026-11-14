@@ -40,8 +40,15 @@ export interface Room {
   amenities?: string[];
 }
 
+export interface BookedServiceSelection {
+  serviceId: string;
+  serviceName: string;
+  amount: number;
+}
+
 export interface Booking {
   id: string;
+  bookedServices?: BookedServiceSelection[];
   hotelId?: string;
   bookingNo?: string;
   guestName: string;
@@ -142,6 +149,7 @@ export interface GuestCheckIn {
   cFormData?: CFormDetails;
   guestSignature?: string;
   checkedInBy?: string;
+  bookedServices?: BookedServiceSelection[];
   extraCharges?: ExtraCharge[];
   status?: string;
   checkedOutDateTime?: string;
@@ -376,6 +384,11 @@ export interface DailyClosing {
 export interface WaterBottleLog {
   id: string;
   hotelId?: string;
+  recordType?: string;
+  serviceName?: string;
+  configuredAmount?: number;
+  chargeAmount?: number;
+  isChargeable?: boolean;
   roomNumber: string;
   guestName?: string;
   complimentaryQty: number;

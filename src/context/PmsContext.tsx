@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
 import {
   AdminSession,
   AppNotificationItem,
+  BookedServiceSelection,
   Booking,
   DailyClosing,
   Expense,
@@ -66,6 +67,7 @@ interface PmsContextValue {
     advanceAmount: number;
     paymentMethod: string;
     bookingSource: string;
+    bookedServices?: BookedServiceSelection[];
   }) => Promise<{ ok: boolean; error?: string }>;
   performCheckIn: (input: {
     linkedBookingId?: string;
@@ -102,6 +104,7 @@ interface PmsContextValue {
     isCFormRequired?: boolean;
     cFormData?: GuestCheckIn['cFormData'];
     guestSignature?: string;
+    bookedServices?: BookedServiceSelection[];
   }) => Promise<{ ok: boolean; error?: string }>;
   performCheckout: (input: {
     bookingOrCheckInId: string;
@@ -206,6 +209,7 @@ interface PmsContextValue {
     complimentaryQty: number;
     chargeableQty: number;
   }) => Promise<void>;
+  addExtraServiceCatalogItem: (serviceName: string, amount: number) => Promise<void>;
   addStaffMember: (input: {
     name: string;
     mobile: string;
@@ -341,6 +345,8 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const totalRoomsCount = Math.max(1, selectedRooms.length);
     const perRoomDiscount = Math.round(((Math.max(0, Number(input.discount) || 0)) / totalRoomsCount) * 100) / 100;
     const perRoomAdvance = Math.round(((Math.max(0, Number(input.advanceAmount) || 0)) / totalRoomsCount) * 100) / 100;
+    const selectedServices = Array.isArray(input.bookedServices) ? input.bookedServices : [];
+    const totalServicesSum = selectedServices.reduce((s, item) => s + (Number(item.amount) || 0), 0);
 
     const createdBookings: Booking[] = selectedRooms.map((rmNo, idx) => {
       const matchedRoom = state.rooms.find((r) => r.number === rmNo);
@@ -349,7 +355,8 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ? Number(matchedRoom.rate)
           : Number(input.ratePerNight) || Number(matchedRoom?.rate || 2000);
       const roomSub = Math.round(unitRate * nights * 100) / 100;
-      const taxable = Math.max(0, roomSub - perRoomDiscount);
+      const roomServicesShare = idx === 0 ? totalServicesSum : 0;
+      const taxable = Math.max(0, roomSub + roomServicesShare - perRoomDiscount);
       const gstAmt = effRate > 0 ? Math.round(((taxable * effRate) / 100) * 100) / 100 : 0;
       const totalPayable = Math.round((taxable + gstAmt) * 100) / 100;
       const due = Math.max(0, Math.round((totalPayable - perRoomAdvance) * 100) / 100);
@@ -357,6 +364,7 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       return {
         id: bkgId,
+        bookedServices: idx === 0 ? selectedServices : [],
         bookingNo: bkgId,
         hotelId: session.hotelId,
         guestName: input.guestName.trim(),
@@ -424,10 +432,13 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!session) return { ok: false, error: 'Not authenticated' };
     const nights = calcNights(input.checkInDate, input.checkOutDate);
     const roomSub = Math.round(input.ratePerNight * nights * 100) / 100;
+    const selectedServices = Array.isArray(input.bookedServices) ? input.bookedServices : [];
+    const servicesSum = selectedServices.reduce((s, item) => s + (Number(item.amount) || 0), 0);
     const earlyLateSub =
       Math.max(0, Number(input.earlyCheckInCharge) || 0) +
       Math.max(0, Number(input.lateCheckOutCharge) || 0) +
-      Math.max(0, Number(input.extraBedCharge) || 0);
+      Math.max(0, Number(input.extraBedCharge) || 0) +
+      servicesSum;
     const disc = Math.max(0, Number(input.discount) || 0);
     const taxable = Math.max(0, roomSub + earlyLateSub - disc);
     const existingInv = input.linkedBookingId
@@ -468,6 +479,16 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         amount: Number(input.extraBedCharge),
       });
     }
+    selectedServices.forEach((srv, idx) => {
+      if (Number(srv.amount) > 0) {
+        extraList.push({
+          id: `ALLOC-CHK-${Date.now()}-${idx}`,
+          category: 'Extra Service',
+          description: srv.serviceName,
+          amount: Number(srv.amount),
+        });
+      }
+    });
 
     const newCheckin: GuestCheckIn = {
       id: checkInId,
@@ -508,6 +529,7 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       cFormData: input.isCFormRequired ? input.cFormData : undefined,
       guestSignature: input.guestSignature || '',
       checkedInBy: session.username,
+      bookedServices: selectedServices,
       extraCharges: extraList,
       status: 'Active',
     };
@@ -1254,6 +1276,32 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     await syncLiveHotelDataApi(session, { waterBottles: next });
   };
 
+  const addExtraServiceCatalogItem: PmsContextValue['addExtraServiceCatalogItem'] = async (
+    serviceName,
+    amount
+  ) => {
+    if (!session || !serviceName.trim()) return;
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const cleanAmt = Math.max(0, Number(amount) || 0);
+    const item: WaterBottleLog = {
+      id: `SRV-${Date.now().toString().slice(-6)}`,
+      hotelId: session.hotelId,
+      recordType: 'service_catalog',
+      serviceName: serviceName.trim(),
+      configuredAmount: cleanAmt,
+      chargeAmount: cleanAmt,
+      isChargeable: cleanAmt > 0,
+      roomNumber: 'CATALOG',
+      complimentaryQty: 0,
+      chargeableQty: 0,
+      amount: cleanAmt,
+      date: todayStr,
+    };
+    const next = [item, ...state.waterBottles];
+    setState((prev) => ({ ...prev, waterBottles: next }));
+    await syncLiveHotelDataApi(session, { waterBottles: next });
+  };
+
   const addStaffMember: PmsContextValue['addStaffMember'] = async (input) => {
     if (!session) return;
     const st: StaffMember = {
@@ -1340,6 +1388,7 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addFinanceVoucher,
         addDailyClosing,
         addWaterBottleLog,
+        addExtraServiceCatalogItem,
         addStaffMember,
         toggleStaffStatus,
         updateHotelProfileSettings,

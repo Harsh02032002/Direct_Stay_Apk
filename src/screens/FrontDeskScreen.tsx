@@ -18,17 +18,25 @@ import {
   Square,
   Globe,
   ClipboardList,
+  Sparkles,
 } from 'lucide-react-native';
 import { usePms } from '../context/PmsContext';
 import { COLORS } from '../theme/colors';
-import { Booking } from '../types/pms';
+import { BookedServiceSelection, Booking } from '../types/pms';
 import { SubTabStrip } from '../components/SubTabStrip';
 import { DateFilterBar, matchesQuickDateFilter, QuickDateFilter } from '../components/DateFilterBar';
 
-type FrontSubMode = 'advance' | 'reservations' | 'checkin' | 'inhouse' | 'cform';
+type FrontSubMode = 'advance' | 'reservations' | 'checkin' | 'inhouse' | 'services' | 'cform';
 
 export const FrontDeskScreen: React.FC = () => {
-  const { state, hotelProfile, createAdvanceBooking, performCheckIn, performCheckout } = usePms();
+  const {
+    state,
+    hotelProfile,
+    createAdvanceBooking,
+    performCheckIn,
+    performCheckout,
+    addExtraServiceCatalogItem,
+  } = usePms();
   const [subMode, setSubMode] = useState<FrontSubMode>('advance');
   const [dateFilter, setDateFilter] = useState<QuickDateFilter>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -77,7 +85,21 @@ export const FrontDeskScreen: React.FC = () => {
   const [withGst, setWithGst] = useState<boolean>(true);
   const [advanceAmt, setAdvanceAmt] = useState('0');
   const [paymentMethod, setPaymentMethod] = useState('UPI');
+  const [selectedServiceIds, setSelectedServiceIds] = useState<string[]>([]);
+  const [newSrvName, setNewSrvName] = useState('');
+  const [newSrvPrice, setNewSrvPrice] = useState('300');
   const [submitting, setSubmitting] = useState(false);
+
+  const serviceCatalog = state.waterBottles.filter((w) => w.recordType === 'service_catalog');
+  const servicePriceOf = (w: (typeof serviceCatalog)[number]) =>
+    Math.max(0, Number(w.configuredAmount ?? w.chargeAmount ?? w.amount ?? 0));
+  const tickedServices = serviceCatalog.filter((s) => selectedServiceIds.includes(String(s.id)));
+  const servicesTotal = tickedServices.reduce((sum, s) => sum + servicePriceOf(s), 0);
+  const bookedServicesPayload: BookedServiceSelection[] = tickedServices.map((s) => ({
+    serviceId: String(s.id),
+    serviceName: String(s.serviceName || 'Extra Service'),
+    amount: servicePriceOf(s),
+  }));
 
   // Foreign Guest Form-C (Optional toggle for foreign nationals)
   const [isCFormRequired, setIsCFormRequired] = useState(false);
@@ -114,7 +136,7 @@ export const FrontDeskScreen: React.FC = () => {
         }, 0)
       : (Number(ratePerNight) || 0) * nights;
 
-  const taxable = Math.max(0, roomSub - (Number(discount) || 0));
+  const taxable = Math.max(0, roomSub + servicesTotal - (Number(discount) || 0));
   const effGst = withGst ? defaultGst : 0;
   const taxAmt = effGst > 0 ? Math.round(((taxable * effGst) / 100) * 100) / 100 : 0;
   const grandTotal = Math.round((taxable + taxAmt) * 100) / 100;
@@ -154,6 +176,7 @@ export const FrontDeskScreen: React.FC = () => {
     setWithGst(!savedNoGst);
     setAdvanceAmt(String(b.advanceAmount ?? b.amountPaid ?? 0));
     setPaymentMethod(b.paymentMethod || 'UPI');
+    setSelectedServiceIds((b.bookedServices || []).map((s) => String(s.serviceId)));
     setSubMode('checkin');
   };
 
@@ -170,6 +193,7 @@ export const FrontDeskScreen: React.FC = () => {
     setGstNumber('');
     setAdvanceAmt('0');
     setDiscount('0');
+    setSelectedServiceIds([]);
     setIsCFormRequired(false);
     setPassportNo('');
     setVisaNo('');
@@ -202,6 +226,7 @@ export const FrontDeskScreen: React.FC = () => {
       advanceAmount: Number(advanceAmt) || 0,
       paymentMethod,
       bookingSource: 'Direct',
+      bookedServices: bookedServicesPayload,
     });
     setSubmitting(false);
     if (!res.ok) {
@@ -253,6 +278,7 @@ export const FrontDeskScreen: React.FC = () => {
       gstRate: defaultGst,
       advanceAmount: Number(advanceAmt) || 0,
       paymentMethod,
+      bookedServices: bookedServicesPayload,
       isCFormRequired,
       cFormData: isCFormRequired
         ? {
@@ -351,6 +377,12 @@ export const FrontDeskScreen: React.FC = () => {
             label: 'In-House & Checkout',
             count: activeInHouseList.length,
             Icon: LogOut,
+          },
+          {
+            id: 'services',
+            label: 'Extra Services',
+            count: serviceCatalog.length,
+            Icon: Sparkles,
           },
           {
             id: 'cform',
@@ -755,6 +787,115 @@ export const FrontDeskScreen: React.FC = () => {
               </View>
             )}
 
+            {/* Available Extra Services / Options (Shown in BOTH Advance Booking & Check-In!) */}
+            <View
+              style={{
+                backgroundColor: '#F0FDFA',
+                borderWidth: 1,
+                borderColor: '#99F6E4',
+                borderRadius: 12,
+                padding: 12,
+                marginBottom: 12,
+              }}
+            >
+              <View
+                style={{
+                  flexDirection: 'row',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  marginBottom: 8,
+                }}
+              >
+                <View style={{ flex: 1, marginRight: 8 }}>
+                  <Text
+                    style={{
+                      fontSize: 11,
+                      fontWeight: '800',
+                      color: '#0F766E',
+                      letterSpacing: 0.4,
+                    }}
+                  >
+                    ✨ AVAILABLE EXTRA SERVICES ({serviceCatalog.length})
+                  </Text>
+                  <Text style={{ fontSize: 11, color: COLORS.textSecondary, marginTop: 2 }}>
+                    Tap to add extra services to this {subMode === 'advance' ? 'Advance Booking' : 'Check-In'}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  onPress={() => setSubMode('services')}
+                  style={{
+                    backgroundColor: '#FFF',
+                    borderWidth: 1,
+                    borderColor: '#5EEAD4',
+                    paddingHorizontal: 8,
+                    paddingVertical: 5,
+                    borderRadius: 8,
+                  }}
+                >
+                  <Text style={{ fontSize: 11, fontWeight: '800', color: '#0F766E' }}>
+                    + Manage
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              {serviceCatalog.length === 0 ? (
+                <Text style={{ fontSize: 11, color: COLORS.textMuted, fontStyle: 'italic' }}>
+                  No extra services added yet. Tap "+ Manage" to add service categories.
+                </Text>
+              ) : (
+                serviceCatalog.map((srv) => {
+                  const sid = String(srv.id);
+                  const picked = selectedServiceIds.includes(sid);
+                  const price = servicePriceOf(srv);
+                  return (
+                    <TouchableOpacity
+                      key={sid}
+                      activeOpacity={0.8}
+                      onPress={() =>
+                        setSelectedServiceIds((prev) =>
+                          prev.includes(sid) ? prev.filter((x) => x !== sid) : [...prev, sid]
+                        )
+                      }
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        backgroundColor: picked ? '#ECFDF5' : '#FFFFFF',
+                        borderWidth: 1,
+                        borderColor: picked ? '#10B981' : '#E2E8F0',
+                        borderRadius: 10,
+                        paddingHorizontal: 10,
+                        paddingVertical: 9,
+                        marginBottom: 6,
+                      }}
+                    >
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+                        {picked ? (
+                          <CheckSquare size={17} color={COLORS.emerald} />
+                        ) : (
+                          <Square size={17} color={COLORS.textMuted} />
+                        )}
+                        <Text
+                          style={{
+                            fontSize: 12,
+                            fontWeight: '700',
+                            color: COLORS.espresso,
+                            flex: 1,
+                          }}
+                          numberOfLines={1}
+                        >
+                          {srv.serviceName || 'Extra Service'}
+                        </Text>
+                      </View>
+                      <Text style={{ fontSize: 12, fontWeight: '800', color: '#0F766E' }}>
+                        + ₹{price.toLocaleString('en-IN')}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })
+              )}
+            </View>
+
             {/* Live Bill Breakdown */}
             <View style={styles.summaryBox}>
               <View style={styles.sumRow}>
@@ -763,6 +904,16 @@ export const FrontDeskScreen: React.FC = () => {
                 </Text>
                 <Text style={styles.sumVal}>₹{roomSub.toLocaleString('en-IN')}</Text>
               </View>
+              {servicesTotal > 0 && (
+                <View style={styles.sumRow}>
+                  <Text style={styles.sumLabel}>
+                    Extra Services ({tickedServices.length} selected):
+                  </Text>
+                  <Text style={[styles.sumVal, { color: '#0F766E' }]}>
+                    + ₹{servicesTotal.toLocaleString('en-IN')}
+                  </Text>
+                </View>
+              )}
               <View style={styles.sumRow}>
                 <Text style={styles.sumLabel}>
                   {withGst ? `GST (${defaultGst}%):` : 'GST (Without GST — 0%):'}
@@ -885,6 +1036,67 @@ export const FrontDeskScreen: React.FC = () => {
                     </View>
                   );
                 })
+            )}
+          </View>
+        )}
+
+        {/* Extra Services / Guest Services Catalog */}
+        {subMode === 'services' && (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>
+              Extra Services / Categories ({serviceCatalog.length})
+            </Text>
+            <Text style={{ fontSize: 12, color: COLORS.textSecondary, marginBottom: 10 }}>
+              Add extra service categories here — they appear automatically in Advance Booking & Guest Check-In.
+            </Text>
+            <View style={styles.twoCol}>
+              <View style={{ flex: 1.5 }}>
+                <Text style={styles.inputLabel}>Service / Category Name *</Text>
+                <TextInput
+                  value={newSrvName}
+                  onChangeText={setNewSrvName}
+                  placeholder="e.g. Airport Pickup, Decoration"
+                  placeholderTextColor={COLORS.textMuted}
+                  style={styles.input}
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.inputLabel}>Charge (₹) *</Text>
+                <TextInput
+                  value={newSrvPrice}
+                  onChangeText={setNewSrvPrice}
+                  keyboardType="numeric"
+                  placeholder="300"
+                  style={styles.input}
+                />
+              </View>
+            </View>
+            <TouchableOpacity
+              onPress={async () => {
+                if (!newSrvName.trim()) {
+                  Alert.alert('Validation', 'Please enter service name');
+                  return;
+                }
+                await addExtraServiceCatalogItem(newSrvName, Number(newSrvPrice) || 0);
+                setNewSrvName('');
+                Alert.alert('Added', 'Extra service category added to Advance Booking & Check-In!');
+              }}
+              style={[styles.primaryActionBtn, { marginBottom: 14 }]}
+            >
+              <Text style={styles.primaryActionText}>+ Add Extra Service Category</Text>
+            </TouchableOpacity>
+
+            {serviceCatalog.length === 0 ? (
+              <Text style={styles.emptyText}>No extra services added yet.</Text>
+            ) : (
+              serviceCatalog.map((srv) => (
+                <View key={srv.id} style={styles.inhouseRow}>
+                  <Text style={styles.inhouseGuest}>{srv.serviceName}</Text>
+                  <Text style={[styles.sumVal, { color: COLORS.emerald }]}>
+                    ₹{servicePriceOf(srv).toLocaleString('en-IN')}
+                  </Text>
+                </View>
+              ))
             )}
           </View>
         )}
