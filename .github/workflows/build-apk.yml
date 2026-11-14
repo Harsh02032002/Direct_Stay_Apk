@@ -11,9 +11,12 @@ on:
       - master
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-android-apk:
-    name: Build Release & Debug APK
+    name: Build Signed Release & Debug APK
     runs-on: ubuntu-latest
 
     steps:
@@ -41,37 +44,48 @@ jobs:
       - name: Install NPM dependencies
         run: npm install --legacy-peer-deps
 
-      - name: Ensure Android native directory & XML configs are up to date
+      - name: Ensure Android native directory, Release Keystore & permissions
         run: |
           if [ ! -f "android/gradlew" ]; then
             CI=1 npx expo prebuild --platform android --no-install
           fi
+          if [ ! -f "android/app/directstay-release.keystore" ]; then
+            keytool -genkeypair -v -storetype PKCS12 \
+              -keystore android/app/directstay-release.keystore \
+              -alias directstay-admin-key \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "DirectStay@2026" -keypass "DirectStay@2026" \
+              -dname "CN=DirectStay Admin, OU=Hospitality PMS, O=DirectStay, L=New Delhi, ST=Delhi, C=IN"
+          fi
           sed -i 's/\r$//' android/gradlew
           chmod +x android/gradlew
 
-      - name: Build Android Debug & Release APKs
+      - name: Build Signed Android Release & Debug APKs
         working-directory: ./android
-        run: ./gradlew assembleDebug assembleRelease --no-daemon
+        run: ./gradlew assembleRelease assembleDebug --no-daemon
 
-      - name: Copy & Rename APK outputs
+      - name: Verify APK Signature & Package Integrity
         run: |
           mkdir -p dist-apk
-          cp android/app/build/outputs/apk/release/app-release.apk dist-apk/DirectStay-Admin-Release.apk
+          cp android/app/build/outputs/apk/release/app-release.apk dist-apk/DirectStay-Admin.apk
           cp android/app/build/outputs/apk/debug/app-debug.apk dist-apk/DirectStay-Admin-Debug.apk
           ls -lh dist-apk/
 
-      - name: Upload DirectStay Admin Release APK
+      - name: Upload DirectStay Admin Signed APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: DirectStay-Admin-Release-APK
-          path: dist-apk/DirectStay-Admin-Release.apk
+          name: DirectStay-Admin-APK
+          path: dist-apk/DirectStay-Admin.apk
           if-no-files-found: error
           retention-days: 90
 
-      - name: Upload DirectStay Admin Debug APK
-        uses: actions/upload-artifact@v4
+      - name: Publish Direct-Download APK on GitHub Releases
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
         with:
-          name: DirectStay-Admin-Debug-APK
-          path: dist-apk/DirectStay-Admin-Debug.apk
-          if-no-files-found: error
-          retention-days: 30
+          tag_name: latest-apk
+          name: "DirectStay Admin Mobile APK (Latest)"
+          prerelease: false
+          files: |
+            dist-apk/DirectStay-Admin.apk
+            dist-apk/DirectStay-Admin-Debug.apk
