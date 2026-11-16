@@ -1,3 +1,5 @@
+import type { BillLedgerLine, BillTaxRow } from '../utils/billCalculator';
+
 export type AdminModuleId =
   | 'dashboard'
   | 'frontDesk'
@@ -51,24 +53,47 @@ export interface Booking {
   bookedServices?: BookedServiceSelection[];
   hotelId?: string;
   bookingNo?: string;
+  grcNumber?: string;
   guestName: string;
   customerName?: string;
   mobile: string;
   email: string;
   aadhaarNumber: string;
+  idType?: string;
+  idNumber?: string;
   address: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
+  nationality?: string;
   companyName?: string;
   gstNumber?: string;
+  voucherNumber?: string;
+  sourceBookingId?: string;
   checkInDate: string;
+  checkInTime?: string;
+  arrivalTime?: string;
   checkOutDate: string;
+  checkOutTime?: string;
+  departureTime?: string;
   nights: number;
   adults: number;
   children: number;
   roomNumber: string;
+  roomNumbers?: string[];
   roomType: string;
+  bookedRooms?: any[];
+  requirements?: any[];
+  otherServices?: any[];
+  payments?: any[];
+  earlyCheckInCharge?: number;
+  hasExtraBed?: boolean;
+  extraBedCount?: number;
+  extraBedRate?: number;
   bookingAmount?: number;
   roomSubtotal?: number;
   discountAmount?: number;
+  discount?: number;
   gstRate?: number;
   gstAmount?: number;
   isWithoutGst?: boolean;
@@ -79,6 +104,7 @@ export interface Booking {
   advanceAmount: number;
   amountPaid?: number;
   dueAmount?: number;
+  refundAmount?: number;
   paymentMethod: string;
   paymentStatus?: 'Unpaid' | 'Partially Paid' | 'Fully Paid' | 'Refunded';
   bookingSource: string;
@@ -94,7 +120,10 @@ export interface ExtraCharge {
   category: string;
   description: string;
   amount: number;
+  date?: string;
   dateTime?: string;
+  sourceType?: string;
+  sourceId?: string;
 }
 
 export interface CFormDetails {
@@ -114,11 +143,15 @@ export interface GuestCheckIn {
   id: string;
   hotelId?: string;
   bookingId?: string;
+  grcNumber?: string;
   guestName: string;
   mobile?: string;
   phone?: string;
   email?: string;
   address?: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
   nationality?: string;
   comingFrom?: string;
   goingTo?: string;
@@ -129,19 +162,35 @@ export interface GuestCheckIn {
   aadhaarNumber?: string;
   companyName?: string;
   gstNumber?: string;
+  voucherNumber?: string;
   roomNumber: string;
   roomType?: string;
   roomRate: number;
+  nights?: number;
   checkInDate: string;
+  checkInTime?: string;
   arrivalTime?: string;
   checkOutDate: string;
+  checkOutTime?: string;
   departureTime?: string;
   earlyCheckInCharge?: number;
   lateCheckOutCharge?: number;
   extraBedCharge?: number;
+  hasExtraBed?: boolean;
+  extraBedCount?: number;
+  extraBedRate?: number;
+  extraPersonChargeApplied?: number;
   adults?: number;
   children?: number;
+  discount?: number;
+  discountAmount?: number;
   advanceAmount?: number;
+  advancePaid?: number;
+  paymentMethod?: string;
+  payments?: any[];
+  otherServices?: any[];
+  isGroupCheckIn?: boolean;
+  bookedRooms?: any[];
   gstRate?: number;
   gstAmount?: number;
   isWithoutGst?: boolean;
@@ -164,26 +213,40 @@ export interface Invoice {
   guestName: string;
   guestMobile?: string;
   mobile?: string;
+  guestAddress?: string;
   companyName?: string;
   guestGstNumber?: string;
   gstNumber?: string;
   roomNumber: string;
+  roomNumbers?: string[];
   checkInDate: string;
   checkOutDate: string;
+  nights?: number;
   roomCharges: number;
+  extraBedCharges?: number;
+  extraPersonCharges?: number;
+  earlyCheckInCharges?: number;
+  lateCheckOutCharges?: number;
   foodCharges: number;
   waterCharges: number;
-  otherCharges: number;
   laundryCharges?: number;
+  serviceCharges?: number;
+  fineCharges?: number;
+  otherCharges: number;
+  extraChargesTotal?: number;
   subtotal: number;
   discount: number;
+  taxableAmount?: number;
   gstRate?: number;
   gst: number;
   cgst?: number;
   sgst?: number;
+  taxAmount?: number;
+  taxRows?: BillTaxRow[];
   isWithoutGst?: boolean;
   isSeparateInvoice?: boolean;
   parentInvoiceId?: string;
+  invoiceScope?: 'Only Booking' | 'Booking + Other Services';
   invoiceType?:
     | 'Booking Invoice'
     | 'Stay Checkout Invoice'
@@ -191,12 +254,18 @@ export interface Invoice {
     | 'Tax Invoice'
     | 'Bill of Supply';
   finalAmount: number;
+  totalAmount?: number;
   advancePaid?: number;
+  paidAmount?: number;
   pendingAmount?: number;
+  refundDue?: number;
   isPaid: boolean;
   paymentStatus?: 'Unpaid' | 'Partially Paid' | 'Paid' | 'Cancelled' | 'Refunded';
   invoiceStatus?: 'Draft' | 'Generated' | 'Finalized' | 'Cancelled';
   paymentMethod?: string;
+  ledgerLines?: BillLedgerLine[];
+  amountInWords?: string;
+  billEngine?: string;
   dateCreated: string;
   date?: string;
 }
@@ -214,6 +283,8 @@ export interface PosItem {
 export interface PosOrder {
   id: string;
   hotelId?: string;
+  bookingId?: string;
+  checkInId?: string;
   orderNumber?: string;
   orderType: string;
   roomNumber?: string;
@@ -228,11 +299,17 @@ export interface PosOrder {
     total: number;
   }>;
   subtotal: number;
+  discount?: number;
   taxAmount?: number;
+  gstAmount?: number;
   totalAmount: number;
+  grandTotal?: number;
+  postToRoomBill?: boolean;
   paymentStatus: 'Paid' | 'Unpaid' | string;
   paymentMethod?: string;
   status: string;
+  date?: string;
+  createdAt?: string;
   dateTime?: string;
 }
 
@@ -250,10 +327,16 @@ export interface HousekeepingLog {
 export interface LaundryOrder {
   id: string;
   hotelId?: string;
+  bookingId?: string;
+  checkInId?: string;
+  orderNumber?: string;
+  orderType?: string;
   roomNumber: string;
   guestName?: string;
   itemsSummary?: string;
   amount: number;
+  totalAmount?: number;
+  paymentStatus?: string;
   status: string;
   date: string;
 }
@@ -384,6 +467,8 @@ export interface DailyClosing {
 export interface WaterBottleLog {
   id: string;
   hotelId?: string;
+  bookingId?: string;
+  checkInId?: string;
   recordType?: string;
   serviceName?: string;
   configuredAmount?: number;
@@ -391,10 +476,24 @@ export interface WaterBottleLog {
   isChargeable?: boolean;
   roomNumber: string;
   guestName?: string;
+  quantity?: number;
+  totalBottles?: number;
   complimentaryQty: number;
+  complimentaryCount?: number;
   chargeableQty: number;
+  extraChargeableCount?: number;
+  unitPrice?: number;
+  ratePerBottle?: number;
+  totalAmount?: number;
+  totalCharge?: number;
   amount?: number;
   date: string;
+  dateTime?: string;
+  createdAt?: string;
+  suppliedBy?: string;
+  loggedBy?: string;
+  staffName?: string;
+  notes?: string;
 }
 
 export interface StaffMember {
@@ -438,17 +537,32 @@ export interface HotelProfile {
   id: string;
   name: string;
   address?: string;
+  state?: string;
+  placeOfSupply?: string;
   phoneNumber?: string;
   phone?: string;
   emailAddress?: string;
   email?: string;
   gstNumber?: string;
+  panNumber?: string;
+  logoUrl?: string;
   website?: string;
   checkInTime?: string;
   checkOutTime?: string;
   invoicePrefix?: string;
   nextInvoiceSequence?: number;
+  startingInvoiceNumber?: number;
+  grcPrefix?: string;
+  nextGrcSequence?: number;
   defaultGstRate?: number;
+  roomGstRate?: number;
+  foodGstRate?: number;
+  roomRateIncludesGst?: boolean;
+  taxOnAncillary?: boolean;
+  waterBottleRate?: number;
+  roomSacCode?: string;
+  fnbSacCode?: string;
+  laundrySacCode?: string;
   isGstEnabled?: boolean;
   earlyCheckInFee?: number;
   lateCheckOutFee?: number;

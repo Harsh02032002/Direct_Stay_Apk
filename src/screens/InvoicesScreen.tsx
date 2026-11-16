@@ -5,16 +5,42 @@ import {
   ScrollView,
   TouchableOpacity,
   Modal,
-  Share,
   Alert,
   StyleSheet,
 } from 'react-native';
-import { FilePlus2, Lock, Share2, X, CheckSquare, Square } from 'lucide-react-native';
+import {
+  FilePlus2,
+  Lock,
+  Printer,
+  Share2,
+  X,
+  CheckSquare,
+  Square,
+} from 'lucide-react-native';
 import { usePms } from '../context/PmsContext';
 import { COLORS } from '../theme/colors';
-import { Invoice } from '../types/pms';
+import { HotelProfile, Invoice, PmsStateSnapshot } from '../types/pms';
 import { SubTabStrip } from '../components/SubTabStrip';
-import { DateFilterBar, matchesQuickDateFilter, QuickDateFilter } from '../components/DateFilterBar';
+import {
+  DateFilterBar,
+  matchesQuickDateFilter,
+  QuickDateFilter,
+} from '../components/DateFilterBar';
+import {
+  amountToIndianWords,
+  BillCharge,
+  BillPayment,
+  BillResult,
+  calculateBill,
+  formatDateLabel,
+  formatMoney,
+  normalizeBillSettings,
+  r2,
+} from '../utils/billCalculator';
+import { CollectStayResult, stayNights } from '../utils/folioCollector';
+import { buildStayBill, toInvoicePrintData } from '../utils/stayBilling';
+import { InvoicePrintData, renderInvoiceHtml } from '../utils/printTemplates';
+import { mobilePrint } from '../utils/mobilePrint';
 
 function isInvoiceLockedNoGst(inv: Invoice): boolean {
   return (
@@ -24,13 +50,209 @@ function isInvoiceLockedNoGst(inv: Invoice): boolean {
   );
 }
 
+function buildInvoiceViewAndPrintData(
+  inv: Invoice,
+  state: PmsStateSnapshot,
+  hotelProfile: HotelProfile | null
+): InvoicePrintData {
+  const bkg = state.bookings.find((b) => b.id === inv.bookingId) || null;
+  const chk =
+    state.checkins.find((c) => c.id === inv.checkInId || c.bookingId === inv.bookingId) || null;
+  const baseSettings = normalizeBillSettings(hotelProfile);
+  const noGst = isInvoiceLockedNoGst(inv);
+  const effectiveRoomRate =
+    !noGst && Number(inv.gstRate) > 0 ? Number(inv.gstRate) : baseSettings.roomGstRate;
+
+  // Stored invoice breakdown fields are always pre-tax, so never re-split inclusive rates
+  const invSettings = {
+    ...baseSettings,
+    roomGstRate: effectiveRoomRate,
+    roomRateIncludesGst: false,
+  };
+
+  const nights = Math.max(
+    1,
+    Number(inv.nights) || stayNights(inv.checkInDate, inv.checkOutDate, bkg?.nights)
+  );
+  const roomNumbers =
+    Array.isArray(inv.roomNumbers) && inv.roomNumbers.length > 0
+      ? inv.roomNumbers
+      : String(inv.roomNumber || bkg?.roomNumber || chk?.roomNumber || '')
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
+  const primaryRoom = roomNumbers[0] || '';
+
+  let bill: BillResult;
+
+  if (Array.isArray(inv.ledgerLines) && inv.ledgerLines.length > 0) {
+    const subtotal = r2(inv.subtotal ?? inv.roomCharges ?? 0);
+    const discount = r2(inv.discount ?? 0);
+    const taxableAmount = r2(inv.taxableAmount ?? Math.max(0, subtotal - discount));
+    const cgst = r2(inv.cgst ?? Number(inv.gst || 0) / 2);
+    const sgst = r2(inv.sgst ?? Number(inv.gst || 0) - cgst);
+    const totalTax = r2(inv.taxAmount ?? inv.gst ?? cgst + sgst);
+    const grandTotal = r2(inv.finalAmount ?? inv.totalAmount ?? taxableAmount + totalTax);
+    const receipts = r2(inv.advancePaid ?? inv.paidAmount ?? 0);
+    const diff = r2(grandTotal - receipts);
+    const balance = r2(inv.pendingAmount ?? Math.max(0, diff));
+    const refundDue = r2(inv.refundDue ?? Math.max(0, -diff));
+    const taxRows =
+      Array.isArray(inv.taxRows) && inv.taxRows.length > 0
+        ? inv.taxRows
+        : !noGst && totalTax > 0
+        ? [
+            {
+              rate: effectiveRoomRate,
+              taxable: taxableAmount,
+              cgst,
+              sgst,
+              tax: totalTax,
+            },
+          ]
+        : [];
+
+    bill = {
+      lines: inv.ledgerLines,
+      chargeLines: inv.ledgerLines.filter((l) => l.type === 'charge'),
+      taxRows,
+      totalsByKind: {
+        room: r2(inv.roomCharges),
+        extra_bed: r2(inv.extraBedCharges),
+        extra_person: r2(inv.extraPersonCharges),
+        early_checkin: r2(inv.earlyCheckInCharges),
+        late_checkout: r2(inv.lateCheckOutCharges),
+        food: r2(inv.foodCharges),
+        water: r2(inv.waterCharges),
+        laundry: r2(inv.laundryCharges),
+        service: r2(inv.serviceCharges),
+        fine: r2(inv.fineCharges),
+        other: r2(inv.otherCharges),
+      },
+      subtotal,
+      discount,
+      taxableAmount,
+      cgst,
+      sgst,
+      totalTax,
+      grandTotal,
+      receipts,
+      balance,
+      refundDue,
+      paymentStatus:
+        grandTotal > 0 && balance <= 0
+          ? 'Paid'
+          : receipts > 0
+          ? 'Partially Paid'
+          : grandTotal <= 0
+          ? 'Paid'
+          : 'Unpaid',
+      isGstInvoice: !noGst && totalTax > 0,
+      headlineGstRate: noGst ? 0 : effectiveRoomRate,
+      amountInWords: inv.amountInWords || amountToIndianWords(grandTotal),
+      legacy: {
+        roomCharges: r2(inv.roomCharges),
+        extraBedCharges: r2(inv.extraBedCharges),
+        extraPersonCharges: r2(inv.extraPersonCharges),
+        earlyCheckInCharges: r2(inv.earlyCheckInCharges),
+        lateCheckOutCharges: r2(inv.lateCheckOutCharges),
+        foodCharges: r2(inv.foodCharges),
+        waterCharges: r2(inv.waterCharges),
+        laundryCharges: r2(inv.laundryCharges),
+        serviceCharges: r2(inv.serviceCharges),
+        fineCharges: r2(inv.fineCharges),
+        otherCharges: r2(inv.otherCharges),
+      },
+    };
+  } else {
+    const charges: BillCharge[] = [];
+    const pushIf = (kind: BillCharge['kind'], description: string, amt?: number) => {
+      if (Number(amt) > 0) {
+        charges.push({
+          id: `${kind}-${inv.id}`,
+          kind,
+          description,
+          amount: Number(amt),
+          nights: kind === 'room' ? nights : undefined,
+          rate: kind === 'room' ? r2(Number(amt) / nights) : undefined,
+          date: formatDateLabel(inv.checkOutDate || inv.dateCreated),
+          roomNumber: primaryRoom,
+        });
+      }
+    };
+    pushIf('room', 'Room Charges', inv.roomCharges);
+    pushIf('extra_bed', 'Extra Bed Charges', inv.extraBedCharges);
+    pushIf('extra_person', 'Extra Person Charges', inv.extraPersonCharges);
+    pushIf('early_checkin', 'Early Check-In Charges', inv.earlyCheckInCharges);
+    pushIf('late_checkout', 'Late Check-Out Charges', inv.lateCheckOutCharges);
+    pushIf('food', 'Food & Beverage Charges', inv.foodCharges);
+    pushIf('water', 'Water Bottle Charges', inv.waterCharges);
+    pushIf('laundry', 'Laundry Charges', inv.laundryCharges);
+    pushIf('service', 'Extra Services', inv.serviceCharges);
+    pushIf('other', 'Other Charges', inv.otherCharges);
+
+    const paidAmt = Number(inv.advancePaid ?? inv.paidAmount ?? 0);
+    const payments: BillPayment[] =
+      paidAmt > 0
+        ? [
+            {
+              id: `pay-${inv.id}`,
+              amount: paidAmt,
+              method: inv.paymentMethod || 'Cash',
+              date: inv.dateCreated || inv.date,
+            },
+          ]
+        : [];
+
+    bill = calculateBill({
+      charges,
+      payments,
+      discount: Number(inv.discount || 0),
+      gstEnabled: !noGst,
+      settings: invSettings,
+    });
+  }
+
+  const folio: CollectStayResult = {
+    charges: [],
+    payments: [],
+    gstEnabled: !noGst,
+    discount: bill.discount,
+    roomNumbers: roomNumbers.length ? roomNumbers : [inv.roomNumber || ''],
+    nights,
+    checkInDate: inv.checkInDate,
+    checkOutDate: inv.checkOutDate,
+    stayIds: [inv.bookingId, inv.checkInId || ''].filter(Boolean),
+  };
+
+  const guestOverride = {
+    ...(bkg || {}),
+    guestName: inv.guestName || bkg?.guestName,
+    mobile: inv.guestMobile || inv.mobile || bkg?.mobile,
+    address: inv.guestAddress || chk?.address || bkg?.address,
+    companyName: inv.companyName || chk?.companyName || bkg?.companyName,
+    gstNumber: inv.guestGstNumber || inv.gstNumber || chk?.gstNumber || bkg?.gstNumber,
+  };
+
+  return toInvoicePrintData({
+    hotel: hotelProfile,
+    invoiceNumber: inv.invoiceNumber || inv.id,
+    invoiceDate: inv.dateCreated || inv.date || inv.checkOutDate,
+    booking: guestOverride,
+    checkin: chk,
+    folio,
+    bill,
+  });
+}
+
 export const InvoicesScreen: React.FC = () => {
   const { state, hotelProfile, generateSeparateOrNewInvoice } = usePms();
-  const defaultGst =
-    Number(hotelProfile?.defaultGstRate) > 0 ? Number(hotelProfile?.defaultGstRate) : 5;
+  const billSettings = normalizeBillSettings(hotelProfile);
 
   const [subTab, setSubTab] = useState<'all' | 'gst' | 'nogst' | 'unpaid'>('all');
   const [dateFilter, setDateFilter] = useState<QuickDateFilter>('all');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
 
   const [viewingInvoice, setViewingInvoice] = useState<Invoice | null>(null);
@@ -46,19 +268,16 @@ export const InvoicesScreen: React.FC = () => {
     setGeneratorOpen(true);
   };
 
-  const handleShareInvoice = async (inv: Invoice) => {
-    const noGst = isInvoiceLockedNoGst(inv);
-    const msg =
-      `*${hotelProfile?.name || 'DirectStay Hotel'}*\n` +
-      `${noGst ? 'ROOM BILL (NO GST)' : `TAX INVOICE (${inv.gstRate || defaultGst}% GST)`}\n` +
-      `Invoice No: ${inv.invoiceNumber || inv.id}\n` +
-      `Guest: ${inv.guestName} (Room ${inv.roomNumber})\n` +
-      `Stay: ${inv.checkInDate} to ${inv.checkOutDate}\n` +
-      `Subtotal: ₹${Number(inv.subtotal || inv.roomCharges || 0).toLocaleString('en-IN')}\n` +
-      (noGst ? '' : `GST: ₹${Number(inv.gst || 0).toLocaleString('en-IN')}\n`) +
-      `*Grand Total: ₹${Number(inv.finalAmount || 0).toLocaleString('en-IN')}*\n` +
-      `Status: ${inv.paymentStatus || (inv.isPaid ? 'Paid' : 'Unpaid')}`;
-    await Share.share({ message: msg });
+  const handlePrintInvoicePdf = async (inv: Invoice) => {
+    const printData = buildInvoiceViewAndPrintData(inv, state, hotelProfile);
+    const html = renderInvoiceHtml(printData);
+    await mobilePrint.printHtml(html, `Invoice ${printData.invoiceNumber}`);
+  };
+
+  const handleShareInvoicePdf = async (inv: Invoice) => {
+    const printData = buildInvoiceViewAndPrintData(inv, state, hotelProfile);
+    const html = renderInvoiceHtml(printData);
+    await mobilePrint.sharePdfFromHtml(html, `Invoice ${printData.invoiceNumber}`);
   };
 
   const filteredInvoices = state.invoices.filter((inv) => {
@@ -66,16 +285,57 @@ export const InvoicesScreen: React.FC = () => {
     if (subTab === 'gst' && noGst) return false;
     if (subTab === 'nogst' && !noGst) return false;
     if (subTab === 'unpaid' && inv.isPaid) return false;
-    if (!matchesQuickDateFilter(inv.dateCreated || inv.date || inv.checkOutDate, dateFilter)) {
+    if (
+      !matchesQuickDateFilter(
+        inv.dateCreated || inv.date || inv.checkOutDate,
+        dateFilter,
+        fromDate,
+        toDate
+      )
+    ) {
       return false;
     }
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
-      const hay = `${inv.invoiceNumber} ${inv.guestName} ${inv.roomNumber}`.toLowerCase();
+      const hay = `${inv.invoiceNumber} ${inv.guestName} ${inv.roomNumber} ${inv.companyName || ''}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
   });
+
+  // Live preview for Separate / New Invoice Generator Modal using Single Bill Calculator
+  const genPreview = (() => {
+    const bkg = state.bookings.find((b) => b.id === selectedBookingId);
+    const chk = state.checkins.find(
+      (c) => c.bookingId === selectedBookingId || c.id === selectedBookingId
+    );
+    if (!bkg && !chk) return null;
+    const scopedBkg = !genIncludeServices && bkg ? { ...bkg, otherServices: [] } : bkg;
+    const scopedChk =
+      !genIncludeServices && chk
+        ? {
+            ...chk,
+            extraCharges: (chk.extraCharges || []).filter((ec) => {
+              const cat = String(ec.category || '').toLowerCase();
+              return (
+                cat.includes('extra bed') ||
+                cat.includes('early check') ||
+                cat.includes('late check')
+              );
+            }),
+          }
+        : chk;
+    return buildStayBill({
+      booking: scopedBkg,
+      checkin: scopedChk,
+      posOrders: genIncludeServices ? state.posOrders : [],
+      laundryOrders: genIncludeServices ? state.laundryOrders : [],
+      waterBottles: genIncludeServices ? state.waterBottles : [],
+      rooms: state.rooms,
+      settings: billSettings,
+      gstEnabledOverride: genWithGst,
+    });
+  })();
 
   return (
     <View style={styles.root}>
@@ -91,7 +351,7 @@ export const InvoicesScreen: React.FC = () => {
           },
           {
             id: 'nogst',
-            label: 'Without GST',
+            label: 'Bill of Supply',
             count: state.invoices.filter((i) => isInvoiceLockedNoGst(i)).length,
           },
           {
@@ -105,6 +365,10 @@ export const InvoicesScreen: React.FC = () => {
       <DateFilterBar
         activeFilter={dateFilter}
         onChangeFilter={setDateFilter}
+        fromDate={fromDate}
+        toDate={toDate}
+        onChangeFromDate={setFromDate}
+        onChangeToDate={setToDate}
         searchQuery={searchQuery}
         onChangeSearch={setSearchQuery}
         searchPlaceholder="Search invoice no, guest, room..."
@@ -115,7 +379,7 @@ export const InvoicesScreen: React.FC = () => {
         <View style={{ flex: 1 }}>
           <Text style={styles.stripTitle}>Official Invoices ({filteredInvoices.length})</Text>
           <Text style={styles.stripSub}>
-            GST mode locks once generated. Tap + Separate for an alternate bill.
+            Tap any invoice for Ledger Preview & PDF Print/Share, or + Separate Bill.
           </Text>
         </View>
         <TouchableOpacity
@@ -138,7 +402,7 @@ export const InvoicesScreen: React.FC = () => {
           <View style={styles.emptyBox}>
             <Text style={styles.emptyTitle}>No Matching Invoices</Text>
             <Text style={styles.emptySub}>
-              Switch filter to "All Records" or tap "+ Separate Bill" to generate one.
+              Switch date filter to "All" or tap "+ Separate Bill" to generate an invoice.
             </Text>
           </View>
         ) : (
@@ -163,7 +427,7 @@ export const InvoicesScreen: React.FC = () => {
                     )}
                   </View>
                   <Text style={styles.invTotal}>
-                    ₹{Number(inv.finalAmount || 0).toLocaleString('en-IN')}
+                    ₹{formatMoney(Number(inv.finalAmount || 0))}
                   </Text>
                 </View>
 
@@ -171,7 +435,8 @@ export const InvoicesScreen: React.FC = () => {
                   {inv.guestName} • Room {inv.roomNumber}
                 </Text>
                 <Text style={styles.invDates}>
-                  {inv.checkInDate} → {inv.checkOutDate}
+                  {formatDateLabel(inv.checkInDate)} → {formatDateLabel(inv.checkOutDate)} • Issued{' '}
+                  {formatDateLabel(inv.dateCreated || inv.date)}
                 </Text>
 
                 <View style={styles.invFooter}>
@@ -189,18 +454,28 @@ export const InvoicesScreen: React.FC = () => {
                       ]}
                     >
                       {noGst
-                        ? 'Locked: No GST (0%)'
-                        : `Locked: GST (${inv.gstRate || defaultGst}%)`}
+                        ? 'Bill of Supply (0%)'
+                        : `Tax Invoice (${inv.gstRate || billSettings.roomGstRate}%)`}
                     </Text>
                   </View>
 
-                  <TouchableOpacity
-                    onPress={() => openGeneratorForBooking(inv.bookingId, noGst)}
-                    style={styles.sepActionBtn}
-                  >
-                    <FilePlus2 size={12} color={COLORS.indigo} />
-                    <Text style={styles.sepActionText}>+ Separate Invoice</Text>
-                  </TouchableOpacity>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <TouchableOpacity
+                      onPress={() => handlePrintInvoicePdf(inv)}
+                      style={styles.pdfQuickBtn}
+                    >
+                      <Printer size={12} color={COLORS.espresso} />
+                      <Text style={styles.pdfQuickBtnText}>PDF</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      onPress={() => openGeneratorForBooking(inv.bookingId, noGst)}
+                      style={styles.sepActionBtn}
+                    >
+                      <FilePlus2 size={12} color={COLORS.indigo} />
+                      <Text style={styles.sepActionText}>+ Separate</Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
               </TouchableOpacity>
             );
@@ -208,32 +483,39 @@ export const InvoicesScreen: React.FC = () => {
         )}
       </ScrollView>
 
-      {/* Invoice Preview Modal */}
+      {/* HOTEL M M PRESTIGE Ledger Invoice Preview Modal */}
       <Modal visible={Boolean(viewingInvoice)} transparent animationType="slide">
         <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
+          <View style={[styles.modalCard, { maxHeight: '92%' }]}>
             {viewingInvoice &&
               (() => {
-                const noGst = isInvoiceLockedNoGst(viewingInvoice);
+                const printData = buildInvoiceViewAndPrintData(
+                  viewingInvoice,
+                  state,
+                  hotelProfile
+                );
+                const b = printData.bill;
+                const isTax = b.isGstInvoice;
+                const h = printData.hotel;
                 return (
                   <>
                     <View style={styles.previewTopBar}>
                       <View
                         style={[
                           styles.lockBadge,
-                          { backgroundColor: noGst ? COLORS.amberSoft : COLORS.emeraldSoft },
+                          { backgroundColor: !isTax ? COLORS.amberSoft : COLORS.emeraldSoft },
                         ]}
                       >
-                        <Lock size={12} color={noGst ? COLORS.amber : COLORS.emerald} />
+                        <Lock size={12} color={!isTax ? COLORS.amber : COLORS.emerald} />
                         <Text
                           style={[
                             styles.lockBadgeText,
-                            { color: noGst ? COLORS.amber : COLORS.emerald },
+                            { color: !isTax ? COLORS.amber : COLORS.emerald },
                           ]}
                         >
-                          {noGst
-                            ? 'Locked: No GST (0% Room Bill)'
-                            : `Locked: With GST (${viewingInvoice.gstRate || defaultGst}%)`}
+                          {isTax
+                            ? `TAX INVOICE (${b.headlineGstRate}% GST)`
+                            : 'BILL OF SUPPLY (0% GST)'}
                         </Text>
                       </View>
                       <TouchableOpacity onPress={() => setViewingInvoice(null)}>
@@ -241,93 +523,241 @@ export const InvoicesScreen: React.FC = () => {
                       </TouchableOpacity>
                     </View>
 
-                    <View style={styles.espressoSheetHeader}>
-                      <Text style={styles.sheetHotelName}>
-                        {hotelProfile?.name || 'DIRECTSTAY HOTEL'}
-                      </Text>
-                      {!noGst && hotelProfile?.gstNumber ? (
-                        <Text style={styles.sheetGstin}>GSTIN: {hotelProfile.gstNumber}</Text>
-                      ) : null}
-                      <Text style={styles.sheetInvNum}>
-                        {noGst ? 'ROOM BILL' : 'TAX INVOICE'} •{' '}
-                        {viewingInvoice.invoiceNumber || viewingInvoice.id}
-                      </Text>
-                    </View>
+                    <ScrollView
+                      showsVerticalScrollIndicator={false}
+                      contentContainerStyle={{ paddingBottom: 8 }}
+                    >
+                      {/* Paper Header (HOTEL M M PRESTIGE layout) */}
+                      <View style={styles.paperSheet}>
+                        <Text style={styles.paperHotelName}>
+                          {(h.name || 'DIRECTSTAY HOTEL').toUpperCase()}
+                        </Text>
+                        {h.address ? (
+                          <Text style={styles.paperHotelMeta}>{h.address}</Text>
+                        ) : null}
+                        {h.phone || h.email ? (
+                          <Text style={styles.paperHotelMeta}>
+                            {[h.phone ? `Ph: ${h.phone}` : '', h.email ? `Email: ${h.email}` : '']
+                              .filter(Boolean)
+                              .join(' • ')}
+                          </Text>
+                        ) : null}
 
-                    <View style={styles.sheetBody}>
-                      <View style={styles.lineRow}>
-                        <Text style={styles.lineLabel}>Guest Name:</Text>
-                        <Text style={styles.lineVal}>{viewingInvoice.guestName}</Text>
-                      </View>
-                      <View style={styles.lineRow}>
-                        <Text style={styles.lineLabel}>Room & Dates:</Text>
-                        <Text style={styles.lineVal}>
-                          Rm {viewingInvoice.roomNumber} ({viewingInvoice.checkInDate} →{' '}
-                          {viewingInvoice.checkOutDate})
-                        </Text>
-                      </View>
-                      <View style={styles.lineRow}>
-                        <Text style={styles.lineLabel}>Room Charges:</Text>
-                        <Text style={styles.lineVal}>
-                          ₹{Number(viewingInvoice.roomCharges || 0).toLocaleString('en-IN')}
-                        </Text>
-                      </View>
-                      {Number(viewingInvoice.foodCharges || 0) +
-                        Number(viewingInvoice.otherCharges || 0) >
-                        0 && (
-                        <View style={styles.lineRow}>
-                          <Text style={styles.lineLabel}>POS / Extra Services:</Text>
-                          <Text style={styles.lineVal}>
-                            ₹
-                            {(
-                              Number(viewingInvoice.foodCharges || 0) +
-                              Number(viewingInvoice.otherCharges || 0)
-                            ).toLocaleString('en-IN')}
+                        <View style={styles.paperTaxBanner}>
+                          <View style={{ flex: 1 }}>
+                            {isTax && h.gstNumber ? (
+                              <Text style={styles.paperSmallBold}>GST: {h.gstNumber}</Text>
+                            ) : null}
+                            {h.panNumber ? (
+                              <Text style={styles.paperSmallBold}>PAN: {h.panNumber}</Text>
+                            ) : null}
+                          </View>
+                          <Text style={styles.paperDocTitle}>
+                            {isTax ? 'TAX INVOICE' : 'BILL OF SUPPLY'}
                           </Text>
                         </View>
-                      )}
-                      {!noGst && (
-                        <View style={styles.lineRow}>
-                          <Text style={styles.lineLabel}>
-                            CGST + SGST ({viewingInvoice.gstRate || defaultGst}%):
+
+                        {/* Guest & Stay Metadata */}
+                        <View style={styles.metaGrid}>
+                          <View style={{ flex: 1.15, gap: 2 }}>
+                            <Text style={styles.metaRowText}>
+                              <Text style={styles.metaKey}>Invoice No: </Text>
+                              {printData.invoiceNumber}
+                            </Text>
+                            {printData.reservationNo ? (
+                              <Text style={styles.metaRowText}>
+                                <Text style={styles.metaKey}>Res. No: </Text>
+                                {printData.reservationNo}
+                              </Text>
+                            ) : null}
+                            <Text style={styles.metaRowText}>
+                              <Text style={styles.metaKey}>Guest: </Text>
+                              {printData.guestName}
+                            </Text>
+                            {printData.guestMobile ? (
+                              <Text style={styles.metaRowText}>
+                                <Text style={styles.metaKey}>Mobile: </Text>
+                                {printData.guestMobile}
+                              </Text>
+                            ) : null}
+                            {printData.companyName ? (
+                              <Text style={styles.metaRowText}>
+                                <Text style={styles.metaKey}>Company: </Text>
+                                {printData.companyName}
+                              </Text>
+                            ) : null}
+                            {isTax && printData.companyGstin ? (
+                              <Text style={styles.metaRowText}>
+                                <Text style={styles.metaKey}>Guest GSTIN: </Text>
+                                {printData.companyGstin}
+                              </Text>
+                            ) : null}
+                            {printData.placeOfSupply ? (
+                              <Text style={styles.metaRowText}>
+                                <Text style={styles.metaKey}>Place of Supply: </Text>
+                                {printData.placeOfSupply}
+                              </Text>
+                            ) : null}
+                          </View>
+
+                          <View style={{ flex: 0.95, gap: 2 }}>
+                            <Text style={styles.metaRowText}>
+                              <Text style={styles.metaKey}>Date: </Text>
+                              {printData.invoiceDate}
+                            </Text>
+                            <Text style={styles.metaRowText}>
+                              <Text style={styles.metaKey}>Room: </Text>
+                              {printData.roomLabel}
+                            </Text>
+                            <Text style={styles.metaRowText}>
+                              <Text style={styles.metaKey}>Pax: </Text>
+                              {printData.pax}
+                            </Text>
+                            <Text style={styles.metaRowText}>
+                              <Text style={styles.metaKey}>Check-In: </Text>
+                              {printData.checkIn}
+                            </Text>
+                            <Text style={styles.metaRowText}>
+                              <Text style={styles.metaKey}>Check-Out: </Text>
+                              {printData.checkOut}
+                            </Text>
+                            <Text style={styles.metaRowText}>
+                              <Text style={styles.metaKey}>Nights: </Text>
+                              {printData.nights}
+                            </Text>
+                          </View>
+                        </View>
+
+                        {/* Ledger Table */}
+                        <View style={styles.ledgerHeader}>
+                          <Text style={[styles.ledgerTh, { flex: 1.8 }]}>Description / SAC</Text>
+                          <Text style={[styles.ledgerTh, { flex: 0.9, textAlign: 'right' }]}>
+                            Charges
                           </Text>
-                          <Text style={styles.lineVal}>
-                            ₹{Number(viewingInvoice.gst || 0).toLocaleString('en-IN')}
+                          <Text style={[styles.ledgerTh, { flex: 0.9, textAlign: 'right' }]}>
+                            Receipts
                           </Text>
                         </View>
-                      )}
-                      <View style={[styles.lineRow, styles.grandRow]}>
-                        <Text style={styles.grandLabel}>GRAND TOTAL</Text>
-                        <Text style={styles.grandVal}>
-                          ₹{Number(viewingInvoice.finalAmount || 0).toLocaleString('en-IN')}
-                        </Text>
+
+                        {b.lines.map((line, idx) => (
+                          <View key={`${line.type}-${idx}`} style={styles.ledgerTr}>
+                            <View style={{ flex: 1.8, paddingRight: 6 }}>
+                              <Text style={styles.ledgerDesc}>
+                                {line.roomNumber ? `[Rm ${line.roomNumber}] ` : ''}
+                                {line.description.replace('\n', ' • ')}
+                              </Text>
+                              {(line.dateLabel || line.sac) && (
+                                <Text style={styles.ledgerSub}>
+                                  {[
+                                    line.dateLabel,
+                                    line.sac ? `SAC ${line.sac}` : '',
+                                  ]
+                                    .filter(Boolean)
+                                    .join(' • ')}
+                                </Text>
+                              )}
+                            </View>
+                            <Text style={styles.ledgerAmt}>
+                              {line.type !== 'receipt' ? formatMoney(line.charges) : '0.00'}
+                            </Text>
+                            <Text style={[styles.ledgerAmt, { color: COLORS.emerald }]}>
+                              {line.receipts !== 0 ? formatMoney(line.receipts) : '0.00'}
+                            </Text>
+                          </View>
+                        ))}
+
+                        {/* Tax Slab Box */}
+                        {isTax && b.taxRows.length > 0 && (
+                          <View style={styles.taxSummaryBox}>
+                            <Text style={styles.taxSummaryTitle}>GST Tax Breakdown</Text>
+                            {b.taxRows.map((tr, idx) => (
+                              <View key={idx} style={styles.lineRow}>
+                                <Text style={styles.lineLabel}>
+                                  Taxable ₹{formatMoney(tr.taxable)} @ {tr.rate}% (CGST ₹
+                                  {formatMoney(tr.cgst)} + SGST ₹{formatMoney(tr.sgst)})
+                                </Text>
+                                <Text style={styles.lineVal}>₹{formatMoney(tr.tax)}</Text>
+                              </View>
+                            ))}
+                          </View>
+                        )}
+
+                        {/* Totals Summary */}
+                        <View style={styles.totalsBox}>
+                          {b.discount > 0 && (
+                            <View style={styles.lineRow}>
+                              <Text style={styles.lineLabel}>Discount:</Text>
+                              <Text style={styles.lineVal}>- ₹{formatMoney(b.discount)}</Text>
+                            </View>
+                          )}
+                          <View style={styles.lineRow}>
+                            <Text style={styles.grandLabel}>Invoice Amount:</Text>
+                            <Text style={styles.grandVal}>₹{formatMoney(b.grandTotal)}</Text>
+                          </View>
+                          <View style={styles.lineRow}>
+                            <Text style={styles.lineLabel}>Less Receipts:</Text>
+                            <Text style={[styles.lineVal, { color: COLORS.emerald }]}>
+                              ₹{formatMoney(b.receipts)}
+                            </Text>
+                          </View>
+                          <View style={[styles.lineRow, styles.balanceDivider]}>
+                            <Text style={styles.grandLabel}>
+                              {b.refundDue > 0 ? 'Refund Due:' : 'Balance Due:'}
+                            </Text>
+                            <Text
+                              style={[
+                                styles.grandVal,
+                                {
+                                  color:
+                                    b.balance > 0 ? COLORS.rose : COLORS.emerald,
+                                },
+                              ]}
+                            >
+                              ₹{formatMoney(b.refundDue > 0 ? b.refundDue : b.balance)}
+                            </Text>
+                          </View>
+                          <Text style={styles.wordsText}>
+                            Amount in Words: {b.amountInWords}
+                          </Text>
+                        </View>
                       </View>
-                    </View>
+                    </ScrollView>
 
                     <View style={styles.previewActions}>
                       <TouchableOpacity
-                        onPress={() => {
-                          const bId = viewingInvoice.bookingId;
-                          setViewingInvoice(null);
-                          openGeneratorForBooking(bId, noGst);
-                        }}
-                        style={styles.separateModalBtn}
+                        onPress={() => handlePrintInvoicePdf(viewingInvoice)}
+                        style={styles.shareBtn}
                       >
-                        <FilePlus2 size={15} color={COLORS.indigo} />
-                        <Text style={styles.separateModalBtnText} numberOfLines={1}>
-                          + Separate ({noGst ? 'With GST' : 'No GST'})
+                        <Printer size={15} color={COLORS.goldBright} />
+                        <Text style={styles.shareBtnText} numberOfLines={1}>
+                          Print / Download PDF
                         </Text>
                       </TouchableOpacity>
                       <TouchableOpacity
-                        onPress={() => handleShareInvoice(viewingInvoice)}
-                        style={styles.shareBtn}
+                        onPress={() => handleShareInvoicePdf(viewingInvoice)}
+                        style={styles.pdfShareSecondaryBtn}
                       >
-                        <Share2 size={15} color={COLORS.goldBright} />
-                        <Text style={styles.shareBtnText} numberOfLines={1}>
-                          Share / WhatsApp
+                        <Share2 size={15} color={COLORS.espresso} />
+                        <Text style={styles.pdfShareSecondaryText} numberOfLines={1}>
+                          Share PDF
                         </Text>
                       </TouchableOpacity>
                     </View>
+
+                    <TouchableOpacity
+                      onPress={() => {
+                        const bId = viewingInvoice.bookingId;
+                        const noGst = isInvoiceLockedNoGst(viewingInvoice);
+                        setViewingInvoice(null);
+                        openGeneratorForBooking(bId, noGst);
+                      }}
+                      style={[styles.separateModalBtn, { marginTop: 8 }]}
+                    >
+                      <FilePlus2 size={14} color={COLORS.indigo} />
+                      <Text style={styles.separateModalBtnText} numberOfLines={1}>
+                        + Generate Separate ({isTax ? 'Bill of Supply / No GST' : 'GST Tax Invoice'})
+                      </Text>
+                    </TouchableOpacity>
                   </>
                 );
               })()}
@@ -335,7 +765,7 @@ export const InvoicesScreen: React.FC = () => {
         </View>
       </Modal>
 
-      {/* Generate Official / Separate Invoice Modal */}
+      {/* Generate Official / Separate Invoice Modal (Single ☑ GST Invoice Checkbox Only!) */}
       <Modal visible={generatorOpen} transparent animationType="slide">
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
@@ -346,7 +776,7 @@ export const InvoicesScreen: React.FC = () => {
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.genSub}>1. Select Booking Folio:</Text>
+            <Text style={styles.genSub}>1. Select Stay Folio:</Text>
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
@@ -373,12 +803,13 @@ export const InvoicesScreen: React.FC = () => {
             {state.invoices.some((i) => i.bookingId === selectedBookingId) && (
               <View style={styles.infoNotice}>
                 <Text style={styles.infoNoticeText}>
-                  🔒 Existing invoice stays untouched. A new Separate Invoice with a unique number
-                  will be created.
+                  🔒 Existing invoice stays untouched. A Separate Invoice in{' '}
+                  {billSettings.invoicePrefix}/.../FY format will be allocated.
                 </Text>
               </View>
             )}
 
+            {/* Single ☑ GST Invoice Checkbox (No 5%/12%/18% buttons — rate comes from Settings) */}
             <TouchableOpacity
               onPress={() => setGenWithGst((p) => !p)}
               style={[
@@ -387,16 +818,20 @@ export const InvoicesScreen: React.FC = () => {
               ]}
             >
               {genWithGst ? (
-                <CheckSquare size={18} color={COLORS.emerald} />
+                <CheckSquare size={19} color={COLORS.emerald} />
               ) : (
-                <Square size={18} color={COLORS.textSecondary} />
+                <Square size={19} color={COLORS.textSecondary} />
               )}
               <View style={{ flex: 1 }}>
                 <Text style={styles.gstCheckTitle}>
-                  GST Invoice ({genWithGst ? `${defaultGst}% GST Applied` : 'Unchecked — 0% No GST'})
+                  GST Invoice (
+                  {genWithGst
+                    ? `Room ${billSettings.roomGstRate}% / Food ${billSettings.foodGstRate}%`
+                    : 'Unchecked — Bill of Supply 0%'}
+                  )
                 </Text>
                 <Text style={styles.gstCheckSub}>
-                  GST % slab is configured in My Profile & Settings
+                  GST rates & prefix ({billSettings.invoicePrefix}) come from Profile & Settings
                 </Text>
               </View>
             </TouchableOpacity>
@@ -407,10 +842,35 @@ export const InvoicesScreen: React.FC = () => {
             >
               <Text style={styles.scopeToggleText}>
                 Scope:{' '}
-                {genIncludeServices ? 'Booking + POS / Extra Services' : 'Only Room Booking'} (Tap
-                to switch)
+                {genIncludeServices
+                  ? 'Booking + Food / Water / Extra Services'
+                  : 'Only Room Booking'}{' '}
+                (Tap to switch)
               </Text>
             </TouchableOpacity>
+
+            {genPreview && (
+              <View style={styles.genPreviewCard}>
+                <View style={styles.lineRow}>
+                  <Text style={styles.lineLabel}>Pre-Tax Subtotal:</Text>
+                  <Text style={styles.lineVal}>₹{formatMoney(genPreview.bill.subtotal)}</Text>
+                </View>
+                {genPreview.bill.discount > 0 && (
+                  <View style={styles.lineRow}>
+                    <Text style={styles.lineLabel}>Less Discount:</Text>
+                    <Text style={styles.lineVal}>- ₹{formatMoney(genPreview.bill.discount)}</Text>
+                  </View>
+                )}
+                <View style={styles.lineRow}>
+                  <Text style={styles.lineLabel}>CGST + SGST:</Text>
+                  <Text style={styles.lineVal}>₹{formatMoney(genPreview.bill.totalTax)}</Text>
+                </View>
+                <View style={[styles.lineRow, { borderTopWidth: 1, borderTopColor: COLORS.border, paddingTop: 5 }]}>
+                  <Text style={styles.grandLabel}>Invoice Total:</Text>
+                  <Text style={styles.grandVal}>₹{formatMoney(genPreview.bill.grandTotal)}</Text>
+                </View>
+              </View>
+            )}
 
             <TouchableOpacity
               disabled={generating || !selectedBookingId}
@@ -419,7 +879,6 @@ export const InvoicesScreen: React.FC = () => {
                 const res = await generateSeparateOrNewInvoice({
                   bookingId: selectedBookingId,
                   withGst: genWithGst,
-                  gstRate: defaultGst,
                   includeServices: genIncludeServices,
                 });
                 setGenerating(false);
@@ -435,7 +894,7 @@ export const InvoicesScreen: React.FC = () => {
               <Text style={styles.generateConfirmText}>
                 {generating
                   ? 'Generating & Syncing...'
-                  : `Generate ${genWithGst ? `GST (${defaultGst}%)` : 'Without GST'} Invoice`}
+                  : `Generate ${genWithGst ? 'Tax Invoice (GST)' : 'Bill of Supply (No GST)'}`}
               </Text>
             </TouchableOpacity>
           </View>
@@ -530,6 +989,18 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   lockBadgeText: { fontSize: 10.5, fontWeight: '800' },
+  pdfQuickBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#FAF3E0',
+    borderWidth: 1,
+    borderColor: COLORS.gold,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 8,
+  },
+  pdfQuickBtnText: { fontSize: 11, fontWeight: '800', color: COLORS.espresso },
   sepActionBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -549,49 +1020,153 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    padding: 18,
-    paddingBottom: 28,
+    padding: 16,
+    paddingBottom: 24,
   },
   previewTopBar: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 10,
   },
-  espressoSheetHeader: {
-    backgroundColor: COLORS.espresso,
-    borderRadius: 15,
-    padding: 14,
-    marginBottom: 12,
-  },
-  sheetHotelName: { color: COLORS.goldBright, fontSize: 15, fontWeight: '900' },
-  sheetGstin: { color: '#D6C9BE', fontSize: 11, marginTop: 2 },
-  sheetInvNum: { color: '#FFFFFF', fontSize: 12, fontWeight: '700', marginTop: 4 },
-  sheetBody: {
-    backgroundColor: '#FAF8F5',
+  paperSheet: {
+    backgroundColor: '#FFFFFF',
     borderRadius: 14,
     padding: 13,
-    gap: 8,
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: '#D6D3D1',
   },
-  lineRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
-  lineLabel: { fontSize: 12, color: COLORS.textSecondary, fontWeight: '600' },
-  lineVal: { fontSize: 12, color: COLORS.textPrimary, fontWeight: '800', flexShrink: 1 },
-  grandRow: {
+  paperHotelName: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: '#111827',
+    textAlign: 'center',
+    letterSpacing: 0.4,
+  },
+  paperHotelMeta: {
+    fontSize: 11,
+    color: COLORS.textSecondary,
+    textAlign: 'center',
+    marginTop: 2,
+  },
+  paperTaxBanner: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
     borderTopWidth: 1,
-    borderTopColor: COLORS.border,
-    paddingTop: 8,
+    borderBottomWidth: 1,
+    borderColor: '#111827',
+    paddingVertical: 6,
+    marginTop: 10,
+    gap: 8,
+  },
+  paperSmallBold: {
+    fontSize: 10.5,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  paperDocTitle: {
+    fontSize: 12.5,
+    fontWeight: '900',
+    color: COLORS.espresso,
+  },
+  metaGrid: {
+    flexDirection: 'row',
+    gap: 10,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  metaRowText: {
+    fontSize: 11,
+    color: '#1F2937',
+    lineHeight: 15,
+  },
+  metaKey: {
+    fontWeight: '800',
+    color: '#111827',
+  },
+  ledgerHeader: {
+    flexDirection: 'row',
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#111827',
     marginTop: 4,
   },
-  grandLabel: { fontSize: 13.5, fontWeight: '900', color: COLORS.espresso },
-  grandVal: { fontSize: 15.5, fontWeight: '900', color: COLORS.goldDark },
-  previewActions: { flexDirection: 'row', gap: 10, marginTop: 14 },
+  ledgerTh: {
+    fontSize: 10.5,
+    fontWeight: '900',
+    color: '#111827',
+  },
+  ledgerTr: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingVertical: 5,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+  },
+  ledgerDesc: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  ledgerSub: {
+    fontSize: 10,
+    color: COLORS.textSecondary,
+    marginTop: 1,
+  },
+  ledgerAmt: {
+    flex: 0.9,
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: '#111827',
+    textAlign: 'right',
+  },
+  taxSummaryBox: {
+    backgroundColor: '#FAF8F5',
+    borderRadius: 10,
+    padding: 9,
+    marginTop: 8,
+    gap: 4,
+    borderWidth: 1,
+    borderColor: '#E5DEC9',
+  },
+  taxSummaryTitle: {
+    fontSize: 10.5,
+    fontWeight: '800',
+    color: COLORS.goldDark,
+    marginBottom: 2,
+  },
+  totalsBox: {
+    marginTop: 10,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#111827',
+    gap: 5,
+  },
+  lineRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
+  lineLabel: { fontSize: 11.5, color: COLORS.textSecondary, fontWeight: '600', flex: 1 },
+  lineVal: { fontSize: 12, color: COLORS.textPrimary, fontWeight: '800' },
+  balanceDivider: {
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
+    paddingTop: 6,
+    marginTop: 2,
+  },
+  grandLabel: { fontSize: 13, fontWeight: '900', color: COLORS.espresso },
+  grandVal: { fontSize: 14.5, fontWeight: '900', color: COLORS.goldDark },
+  wordsText: {
+    fontSize: 11,
+    fontWeight: '700',
+    fontStyle: 'italic',
+    color: '#374151',
+    marginTop: 4,
+  },
+  previewActions: { flexDirection: 'row', gap: 8, marginTop: 12 },
   separateModalBtn: {
-    flex: 1,
-    minHeight: 45,
+    minHeight: 40,
     paddingHorizontal: 10,
-    borderRadius: 12,
+    borderRadius: 11,
     backgroundColor: COLORS.indigoSoft,
     flexDirection: 'row',
     alignItems: 'center',
@@ -600,7 +1175,7 @@ const styles = StyleSheet.create({
   },
   separateModalBtnText: { fontSize: 11.5, fontWeight: '800', color: COLORS.indigo },
   shareBtn: {
-    flex: 1,
+    flex: 1.25,
     minHeight: 45,
     paddingHorizontal: 10,
     borderRadius: 12,
@@ -609,8 +1184,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
+    borderWidth: 1,
+    borderColor: COLORS.gold,
   },
   shareBtnText: { fontSize: 12, fontWeight: '800', color: COLORS.goldBright },
+  pdfShareSecondaryBtn: {
+    flex: 0.9,
+    minHeight: 45,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    backgroundColor: COLORS.gold,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  pdfShareSecondaryText: { fontSize: 12, fontWeight: '800', color: COLORS.espresso },
   genTitle: { fontSize: 15, fontWeight: '800', color: COLORS.textPrimary, flex: 1 },
   genSub: { fontSize: 12, fontWeight: '700', color: COLORS.textSecondary, marginBottom: 7 },
   bkgChip: {
@@ -627,7 +1216,7 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.amberSoft,
     padding: 10,
     borderRadius: 10,
-    marginBottom: 12,
+    marginBottom: 10,
   },
   infoNoticeText: { fontSize: 11, color: COLORS.amber, fontWeight: '700' },
   gstCheckRow: {
@@ -649,9 +1238,18 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     backgroundColor: '#F8FAFC',
-    marginBottom: 14,
+    marginBottom: 10,
   },
   scopeToggleText: { fontSize: 11.5, fontWeight: '700', color: COLORS.textPrimary },
+  genPreviewCard: {
+    backgroundColor: '#FAF8F5',
+    borderRadius: 11,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    gap: 4,
+    marginBottom: 12,
+  },
   generateConfirmBtn: {
     minHeight: 46,
     borderRadius: 13,
@@ -659,6 +1257,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: COLORS.gold,
   },
   generateConfirmText: { fontSize: 13, fontWeight: '800', color: COLORS.goldBright },
 });

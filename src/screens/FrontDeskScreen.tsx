@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -19,14 +19,44 @@ import {
   Globe,
   ClipboardList,
   Sparkles,
+  Printer,
+  Share2,
+  Droplets,
+  X,
 } from 'lucide-react-native';
 import { usePms } from '../context/PmsContext';
 import { COLORS } from '../theme/colors';
-import { BookedServiceSelection, Booking } from '../types/pms';
+import { BookedServiceSelection, Booking, GuestCheckIn } from '../types/pms';
 import { SubTabStrip } from '../components/SubTabStrip';
-import { DateFilterBar, matchesQuickDateFilter, QuickDateFilter } from '../components/DateFilterBar';
+import {
+  DateFilterBar,
+  matchesQuickDateFilter,
+  QuickDateFilter,
+} from '../components/DateFilterBar';
+import {
+  BillCharge,
+  calculateBill,
+  formatMoney,
+  normalizeBillSettings,
+  r2,
+} from '../utils/billCalculator';
+import {
+  allocateGrcNumber,
+  buildStayBill,
+  toGrcPrintData,
+  toInvoicePrintData,
+} from '../utils/stayBilling';
+import { renderGrcHtml, renderInvoiceHtml } from '../utils/printTemplates';
+import { mobilePrint } from '../utils/mobilePrint';
 
-type FrontSubMode = 'advance' | 'reservations' | 'checkin' | 'inhouse' | 'services' | 'cform';
+type FrontSubMode =
+  | 'advance'
+  | 'reservations'
+  | 'checkin'
+  | 'inhouse'
+  | 'water'
+  | 'services'
+  | 'cform';
 
 export const FrontDeskScreen: React.FC = () => {
   const {
@@ -35,14 +65,17 @@ export const FrontDeskScreen: React.FC = () => {
     createAdvanceBooking,
     performCheckIn,
     performCheckout,
+    addWaterBottleLog,
     addExtraServiceCatalogItem,
   } = usePms();
   const [subMode, setSubMode] = useState<FrontSubMode>('advance');
   const [dateFilter, setDateFilter] = useState<QuickDateFilter>('all');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
 
-  const defaultGst =
-    Number(hotelProfile?.defaultGstRate) > 0 ? Number(hotelProfile?.defaultGstRate) : 5;
+  const billSettings = normalizeBillSettings(hotelProfile);
+  const defaultGst = billSettings.roomGstRate;
 
   const todayStr = new Date().toISOString().slice(0, 10);
   const tomorrowDate = new Date();
@@ -54,7 +87,7 @@ export const FrontDeskScreen: React.FC = () => {
   );
   const firstRoom = availableRooms[0] || state.rooms[0];
 
-  // Shared Booking / Check-In Form State (NO Signature section — logged-in user & check-in date/time auto-captured in DB!)
+  // Shared Booking / Check-In Form State
   const [linkedBookingId, setLinkedBookingId] = useState<string>('');
   const [guestName, setGuestName] = useState('');
   const [mobile, setMobile] = useState('');
@@ -91,6 +124,9 @@ export const FrontDeskScreen: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
 
   const serviceCatalog = state.waterBottles.filter((w) => w.recordType === 'service_catalog');
+  const waterBottleLogs = state.waterBottles.filter(
+    (w) => w.recordType !== 'service_catalog' && w.recordType !== 'service_allocation'
+  );
   const servicePriceOf = (w: (typeof serviceCatalog)[number]) =>
     Math.max(0, Number(w.configuredAmount ?? w.chargeAmount ?? w.amount ?? 0));
   const tickedServices = serviceCatalog.filter((s) => selectedServiceIds.includes(String(s.id)));
@@ -116,6 +152,20 @@ export const FrontDeskScreen: React.FC = () => {
   const [coCollectedNow, setCoCollectedNow] = useState('0');
   const [coPayMethod, setCoPayMethod] = useState('UPI');
 
+  // Water Bottle Calculator Modal / Card State
+  const [waterModalOpen, setWaterModalOpen] = useState(false);
+  const [wbRoom, setWbRoom] = useState(firstRoom?.number || '101');
+  const [wbGuestName, setWbGuestName] = useState('');
+  const [wbBookingId, setWbBookingId] = useState('');
+  const [wbCheckInId, setWbCheckInId] = useState('');
+  const [wbTotalBottles, setWbTotalBottles] = useState('3');
+  const [wbFreeBottles, setWbFreeBottles] = useState('1');
+  const [wbRate, setWbRate] = useState(String(billSettings.waterBottleRate || 20));
+
+  useEffect(() => {
+    setWbRate(String(billSettings.waterBottleRate || 20));
+  }, [billSettings.waterBottleRate]);
+
   const nights = (() => {
     const d1 = new Date(`${checkInDate}T00:00:00`);
     const d2 = new Date(`${checkOutDate}T00:00:00`);
@@ -128,19 +178,47 @@ export const FrontDeskScreen: React.FC = () => {
       ? selectedBulkRooms
       : [roomNumber];
 
-  const roomSub =
-    activeRoomsForCalc.length > 1
-      ? activeRoomsForCalc.reduce((sum, rmNo) => {
-          const rm = state.rooms.find((r) => r.number === rmNo);
-          return sum + (Number(rm?.rate || ratePerNight || 2000) * nights);
-        }, 0)
-      : (Number(ratePerNight) || 0) * nights;
+  const formPreviewCharges: BillCharge[] = [
+    ...activeRoomsForCalc.map((rmNo, i) => {
+      const rm = state.rooms.find((r) => r.number === rmNo);
+      const perNight =
+        activeRoomsForCalc.length > 1
+          ? Number(rm?.rate || ratePerNight || 2000)
+          : Number(ratePerNight) || 0;
+      return {
+        id: `rm-${rmNo}-${i}`,
+        kind: 'room' as const,
+        description: 'Room Charges',
+        amount: r2(perNight * nights),
+        rate: perNight,
+        nights,
+        roomNumber: rmNo,
+      };
+    }),
+    ...tickedServices.map((srv, i) => ({
+      id: `srv-${i}`,
+      kind: 'service' as const,
+      description: String(srv.serviceName || 'Extra Service'),
+      amount: servicePriceOf(srv),
+      roomNumber: activeRoomsForCalc[0] || roomNumber,
+    })),
+  ];
 
-  const taxable = Math.max(0, roomSub + servicesTotal - (Number(discount) || 0));
-  const effGst = withGst ? defaultGst : 0;
-  const taxAmt = effGst > 0 ? Math.round(((taxable * effGst) / 100) * 100) / 100 : 0;
-  const grandTotal = Math.round((taxable + taxAmt) * 100) / 100;
-  const netDue = Math.max(0, Math.round((grandTotal - (Number(advanceAmt) || 0)) * 100) / 100);
+  const formBillPreview = calculateBill({
+    charges: formPreviewCharges,
+    payments:
+      Number(advanceAmt) > 0
+        ? [{ id: 'adv', amount: Number(advanceAmt), method: paymentMethod }]
+        : [],
+    discount: Number(discount) || 0,
+    gstEnabled: withGst,
+    settings: billSettings,
+  });
+
+  const roomSub = formBillPreview.legacy.roomCharges;
+  const taxAmt = formBillPreview.totalTax;
+  const grandTotal = formBillPreview.grandTotal;
+  const netDue = formBillPreview.balance;
 
   const toggleBulkRoom = (rmNo: string) => {
     setSelectedBulkRooms((prev) => {
@@ -149,6 +227,112 @@ export const FrontDeskScreen: React.FC = () => {
       }
       return [...prev, rmNo];
     });
+  };
+
+  // GRC Print / Share (exact HOTEL RAJ RESIDENCY Guest Registration Card replica)
+  const buildGrcHtmlForStay = (b?: Booking | null, c?: GuestCheckIn | null): { html: string; regNo: string } => {
+    const chk =
+      c ||
+      (b
+        ? state.checkins.find((x) => x.bookingId === b.id || x.id === b.id) || null
+        : null);
+    const bkg =
+      b ||
+      (chk
+        ? state.bookings.find((x) => x.id === chk.bookingId || x.id === chk.id) || null
+        : null);
+    const existingGrcs = [
+      ...state.checkins.map((x) => x.grcNumber),
+      ...state.bookings.map((x) => x.grcNumber),
+    ];
+    const regNo =
+      chk?.grcNumber ||
+      bkg?.grcNumber ||
+      allocateGrcNumber(existingGrcs, billSettings);
+    const rmNo = chk?.roomNumber || bkg?.roomNumber || '';
+    const rm = state.rooms.find((r) => r.number === rmNo);
+    const grcData = toGrcPrintData({
+      hotel: hotelProfile,
+      regNo,
+      booking: bkg,
+      checkin: chk,
+      roomRate:
+        chk?.roomRate ||
+        (bkg ? r2(Number(bkg.roomSubtotal || bkg.bookingAmount || 0) / Math.max(1, Number(bkg.nights) || 1)) : rm?.rate),
+      roomType: chk?.roomType || bkg?.roomType || rm?.category,
+      settings: billSettings,
+    });
+    return { html: renderGrcHtml(grcData), regNo };
+  };
+
+  const handlePrintGrc = async (b?: Booking | null, c?: GuestCheckIn | null) => {
+    const { html, regNo } = buildGrcHtmlForStay(b, c);
+    await mobilePrint.printHtml(html, `GRC ${regNo}`);
+  };
+
+  const handleShareGrc = async (b?: Booking | null, c?: GuestCheckIn | null) => {
+    const { html, regNo } = buildGrcHtmlForStay(b, c);
+    await mobilePrint.sharePdfFromHtml(html, `GRC ${regNo}`);
+  };
+
+  // Water Bottle Quick Modal Launcher
+  const openWaterModalForStay = (b?: Booking) => {
+    if (b) {
+      const chk = state.checkins.find((c) => c.bookingId === b.id || c.id === b.id);
+      setWbRoom(b.roomNumber);
+      setWbGuestName(b.guestName);
+      setWbBookingId(b.id);
+      setWbCheckInId(chk?.id || '');
+    } else {
+      const firstActive = activeInHouseList[0];
+      if (firstActive) {
+        const chk = state.checkins.find(
+          (c) => c.bookingId === firstActive.id || c.id === firstActive.id
+        );
+        setWbRoom(firstActive.roomNumber);
+        setWbGuestName(firstActive.guestName);
+        setWbBookingId(firstActive.id);
+        setWbCheckInId(chk?.id || '');
+      }
+    }
+    setWbTotalBottles('3');
+    setWbFreeBottles('1');
+    setWbRate(String(billSettings.waterBottleRate || 20));
+    setWaterModalOpen(true);
+  };
+
+  const wbTotalN = Math.max(0, Math.floor(Number(wbTotalBottles) || 0));
+  const wbFreeN = Math.max(0, Math.floor(Number(wbFreeBottles) || 0));
+  const wbChargeableN = Math.max(0, wbTotalN - wbFreeN);
+  const wbRateN = Math.max(0, Number(wbRate) || 0);
+  const wbTotalCharge = r2(wbChargeableN * wbRateN);
+
+  const handleSaveWaterBottles = async (closeModalAfter = false) => {
+    if (!wbRoom.trim()) {
+      Alert.alert('Validation', 'Please enter or select a Room Number.');
+      return;
+    }
+    if (wbTotalN <= 0) {
+      Alert.alert('Validation', 'Total Bottles must be at least 1.');
+      return;
+    }
+    await addWaterBottleLog({
+      roomNumber: wbRoom.trim(),
+      totalBottles: wbTotalN,
+      complimentaryQty: wbFreeN,
+      chargeableQty: wbChargeableN,
+      ratePerBottle: wbRateN,
+      bookingId: wbBookingId || undefined,
+      checkInId: wbCheckInId || undefined,
+      guestName: wbGuestName || undefined,
+    });
+    if (closeModalAfter) setWaterModalOpen(false);
+    Alert.alert(
+      'Water Bottles Logged',
+      `Room ${wbRoom}: ${wbTotalN} Total − ${wbFreeN} Free = ${wbChargeableN} Chargeable × ₹${wbRateN} = ₹${formatMoney(
+        wbTotalCharge
+      )}`
+    );
   };
 
   const loadAdvanceBookingIntoCheckIn = (b: Booking) => {
@@ -222,7 +406,6 @@ export const FrontDeskScreen: React.FC = () => {
       ratePerNight: Number(ratePerNight) || 2000,
       discount: Number(discount) || 0,
       withGst,
-      gstRate: defaultGst,
       advanceAmount: Number(advanceAmt) || 0,
       paymentMethod,
       bookingSource: 'Direct',
@@ -275,7 +458,6 @@ export const FrontDeskScreen: React.FC = () => {
       ratePerNight: Number(ratePerNight) || 2000,
       discount: Number(discount) || 0,
       withGst,
-      gstRate: defaultGst,
       advanceAmount: Number(advanceAmt) || 0,
       paymentMethod,
       bookedServices: bookedServicesPayload,
@@ -294,15 +476,26 @@ export const FrontDeskScreen: React.FC = () => {
       Alert.alert('Check-In Error', res.error || 'Failed to check in guest');
       return;
     }
-    Alert.alert(
-      'Guest Checked In',
-      `${guestName} checked into Room ${roomNumber}. Logged-in user & check-in timestamp saved automatically!`
-    );
     resetForm();
     setSubMode('inhouse');
+    Alert.alert(
+      'Guest Checked In',
+      `${guestName} checked into Room ${roomNumber} (GRC: ${res.grcNumber || 'Generated'}).`,
+      [
+        { text: 'Done', style: 'cancel' },
+        {
+          text: 'Print / Share GRC',
+          onPress: () => {
+            const chk = state.checkins.find((c) => c.id === res.checkInId);
+            if (chk) handlePrintGrc(null, chk);
+          },
+        },
+      ]
+    );
   };
 
   const openCheckoutModal = (b: Booking) => {
+    const chk = state.checkins.find((c) => c.bookingId === b.id || c.id === b.id);
     const existingInv = state.invoices.find(
       (i) => i.bookingId === b.id && !i.isSeparateInvoice
     );
@@ -313,11 +506,22 @@ export const FrontDeskScreen: React.FC = () => {
         b.gstInvoice === false ||
         (b.gstRate !== undefined && Number(b.gstRate) <= 0);
 
+    const preview = buildStayBill({
+      booking: b,
+      checkin: chk,
+      posOrders: state.posOrders,
+      laundryOrders: state.laundryOrders,
+      waterBottles: state.waterBottles,
+      rooms: state.rooms,
+      settings: billSettings,
+      gstEnabledOverride: !savedNoGst,
+    });
+
     setCheckoutTarget(b);
     setCoExtraAmt('0');
-    setCoDiscount(String(b.discountAmount || 0));
+    setCoDiscount(String(preview.folio.discount || 0));
     setCoWithGst(!savedNoGst);
-    setCoCollectedNow(String(b.dueAmount ?? 0));
+    setCoCollectedNow(String(preview.bill.balance));
     setCoPayMethod(b.paymentMethod || 'UPI');
   };
 
@@ -329,7 +533,16 @@ export const FrontDeskScreen: React.FC = () => {
       b.status !== 'Checked Out'
   );
   const filteredReservations = pendingAdvanceList.filter((b) => {
-    if (!matchesQuickDateFilter(b.checkInDate || b.bookingDate, dateFilter)) return false;
+    if (
+      !matchesQuickDateFilter(
+        b.checkInDate || b.bookingDate,
+        dateFilter,
+        fromDate,
+        toDate
+      )
+    ) {
+      return false;
+    }
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       const hay = `${b.guestName} ${b.mobile} ${b.roomNumber} ${b.id}`.toLowerCase();
@@ -379,6 +592,12 @@ export const FrontDeskScreen: React.FC = () => {
             Icon: LogOut,
           },
           {
+            id: 'water',
+            label: 'Water Bottles',
+            count: waterBottleLogs.length,
+            Icon: Droplets,
+          },
+          {
             id: 'services',
             label: 'Extra Services',
             count: serviceCatalog.length,
@@ -393,13 +612,21 @@ export const FrontDeskScreen: React.FC = () => {
         ]}
       />
 
-      {(subMode === 'reservations' || subMode === 'inhouse' || subMode === 'checkin') && (
+      {(subMode === 'reservations' ||
+        subMode === 'inhouse' ||
+        subMode === 'checkin' ||
+        subMode === 'water' ||
+        subMode === 'cform') && (
         <DateFilterBar
           activeFilter={dateFilter}
           onChangeFilter={setDateFilter}
+          fromDate={fromDate}
+          toDate={toDate}
+          onChangeFromDate={setFromDate}
+          onChangeToDate={setToDate}
           searchQuery={searchQuery}
           onChangeSearch={setSearchQuery}
-          showUpcoming
+          showUpcoming={subMode === 'reservations' || subMode === 'checkin'}
           searchPlaceholder="Search guest name, mobile, room..."
         />
       )}
@@ -449,7 +676,7 @@ export const FrontDeskScreen: React.FC = () => {
               </View>
             )}
 
-            {/* Single Clean GST Invoice Click / Unclick Checkbox (Uses Profile Settings GST %) */}
+            {/* Single Clean ☑ GST Invoice Checkbox (Rate comes strictly from Profile & Settings) */}
             {subMode === 'checkin' && isCheckInLockedByInv ? (
               <View style={styles.lockedBanner}>
                 <Lock size={14} color={COLORS.amber} />
@@ -477,10 +704,11 @@ export const FrontDeskScreen: React.FC = () => {
                 )}
                 <View style={{ flex: 1 }}>
                   <Text style={styles.gstSingleTitle}>
-                    GST Invoice ({withGst ? `${defaultGst}% GST Applied` : 'Unchecked — 0% Without GST'})
+                    GST Invoice (
+                    {withGst ? `${defaultGst}% Room GST Applied` : 'Unchecked — 0% Without GST'})
                   </Text>
                   <Text style={styles.gstSingleSub}>
-                    Click / unclick for GST Invoice. Change GST % anytime in My Profile Settings.
+                    Single GST Invoice tick. Configure GST % in Profile & Settings.
                   </Text>
                 </View>
               </TouchableOpacity>
@@ -520,6 +748,15 @@ export const FrontDeskScreen: React.FC = () => {
                 />
               </View>
             </View>
+
+            <Text style={styles.inputLabel}>Address / City</Text>
+            <TextInput
+              value={address}
+              onChangeText={setAddress}
+              placeholder="Guest residential address"
+              placeholderTextColor={COLORS.textMuted}
+              style={styles.input}
+            />
 
             {subMode === 'checkin' && (
               <>
@@ -578,7 +815,6 @@ export const FrontDeskScreen: React.FC = () => {
                   </View>
                 </View>
 
-                {/* Optional Foreigner Form-C Toggle */}
                 <TouchableOpacity
                   onPress={() => setIsCFormRequired((p) => !p)}
                   style={styles.cformToggle}
@@ -642,7 +878,7 @@ export const FrontDeskScreen: React.FC = () => {
               </>
             )}
 
-            {/* Room Selector (Single OR Bulk 3-4+ Rooms in Advance Booking!) */}
+            {/* Room Selector */}
             <View style={styles.roomSelectHeader}>
               <Text style={styles.inputLabel}>
                 {subMode === 'advance' && bulkMode
@@ -787,50 +1023,21 @@ export const FrontDeskScreen: React.FC = () => {
               </View>
             )}
 
-            {/* Available Extra Services / Options (Shown in BOTH Advance Booking & Check-In!) */}
-            <View
-              style={{
-                backgroundColor: '#F0FDFA',
-                borderWidth: 1,
-                borderColor: '#99F6E4',
-                borderRadius: 12,
-                padding: 12,
-                marginBottom: 12,
-              }}
-            >
-              <View
-                style={{
-                  flexDirection: 'row',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  marginBottom: 8,
-                }}
-              >
+            {/* Available Extra Services */}
+            <View style={styles.servicesBox}>
+              <View style={styles.servicesBoxHeader}>
                 <View style={{ flex: 1, marginRight: 8 }}>
-                  <Text
-                    style={{
-                      fontSize: 11,
-                      fontWeight: '800',
-                      color: '#0F766E',
-                      letterSpacing: 0.4,
-                    }}
-                  >
+                  <Text style={styles.servicesBoxTitle}>
                     ✨ AVAILABLE EXTRA SERVICES ({serviceCatalog.length})
                   </Text>
                   <Text style={{ fontSize: 11, color: COLORS.textSecondary, marginTop: 2 }}>
-                    Tap to add extra services to this {subMode === 'advance' ? 'Advance Booking' : 'Check-In'}
+                    Tap to add extra services to this{' '}
+                    {subMode === 'advance' ? 'Advance Booking' : 'Check-In'}
                   </Text>
                 </View>
                 <TouchableOpacity
                   onPress={() => setSubMode('services')}
-                  style={{
-                    backgroundColor: '#FFF',
-                    borderWidth: 1,
-                    borderColor: '#5EEAD4',
-                    paddingHorizontal: 8,
-                    paddingVertical: 5,
-                    borderRadius: 8,
-                  }}
+                  style={styles.manageServicesBtn}
                 >
                   <Text style={{ fontSize: 11, fontWeight: '800', color: '#0F766E' }}>
                     + Manage
@@ -856,18 +1063,7 @@ export const FrontDeskScreen: React.FC = () => {
                           prev.includes(sid) ? prev.filter((x) => x !== sid) : [...prev, sid]
                         )
                       }
-                      style={{
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        backgroundColor: picked ? '#ECFDF5' : '#FFFFFF',
-                        borderWidth: 1,
-                        borderColor: picked ? '#10B981' : '#E2E8F0',
-                        borderRadius: 10,
-                        paddingHorizontal: 10,
-                        paddingVertical: 9,
-                        marginBottom: 6,
-                      }}
+                      style={[styles.servicePickRow, picked && styles.servicePickRowActive]}
                     >
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
                         {picked ? (
@@ -875,15 +1071,7 @@ export const FrontDeskScreen: React.FC = () => {
                         ) : (
                           <Square size={17} color={COLORS.textMuted} />
                         )}
-                        <Text
-                          style={{
-                            fontSize: 12,
-                            fontWeight: '700',
-                            color: COLORS.espresso,
-                            flex: 1,
-                          }}
-                          numberOfLines={1}
-                        >
+                        <Text style={styles.servicePickName} numberOfLines={1}>
                           {srv.serviceName || 'Extra Service'}
                         </Text>
                       </View>
@@ -900,9 +1088,10 @@ export const FrontDeskScreen: React.FC = () => {
             <View style={styles.summaryBox}>
               <View style={styles.sumRow}>
                 <Text style={styles.sumLabel}>
-                  Room Tariff ({activeRoomsForCalc.length} Rm × {nights} Night):
+                  Room Tariff ({activeRoomsForCalc.length} Rm × {nights} Night
+                  {billSettings.roomRateIncludesGst && withGst ? ', Pre-Tax' : ''}):
                 </Text>
-                <Text style={styles.sumVal}>₹{roomSub.toLocaleString('en-IN')}</Text>
+                <Text style={styles.sumVal}>₹{formatMoney(roomSub)}</Text>
               </View>
               {servicesTotal > 0 && (
                 <View style={styles.sumRow}>
@@ -910,24 +1099,24 @@ export const FrontDeskScreen: React.FC = () => {
                     Extra Services ({tickedServices.length} selected):
                   </Text>
                   <Text style={[styles.sumVal, { color: '#0F766E' }]}>
-                    + ₹{servicesTotal.toLocaleString('en-IN')}
+                    + ₹{formatMoney(servicesTotal)}
                   </Text>
                 </View>
               )}
               <View style={styles.sumRow}>
                 <Text style={styles.sumLabel}>
-                  {withGst ? `GST (${defaultGst}%):` : 'GST (Without GST — 0%):'}
+                  {withGst ? `CGST + SGST (${defaultGst}%):` : 'GST (Without GST — 0%):'}
                 </Text>
-                <Text style={styles.sumVal}>₹{taxAmt.toLocaleString('en-IN')}</Text>
+                <Text style={styles.sumVal}>₹{formatMoney(taxAmt)}</Text>
               </View>
               <View style={[styles.sumRow, styles.sumTotalRow]}>
                 <Text style={styles.sumTotalLabel}>Total Payable:</Text>
-                <Text style={styles.sumTotalVal}>₹{grandTotal.toLocaleString('en-IN')}</Text>
+                <Text style={styles.sumTotalVal}>₹{formatMoney(grandTotal)}</Text>
               </View>
               <View style={styles.sumRow}>
                 <Text style={styles.sumLabel}>Balance Due at Hotel:</Text>
                 <Text style={[styles.sumVal, { color: COLORS.rose }]}>
-                  ₹{netDue.toLocaleString('en-IN')}
+                  ₹{formatMoney(netDue)}
                 </Text>
               </View>
             </View>
@@ -950,7 +1139,7 @@ export const FrontDeskScreen: React.FC = () => {
           </View>
         )}
 
-        {/* All Advance Reservations List with Today / All Filter */}
+        {/* All Advance Reservations List with Date-Wise Filter + GRC Print/Share */}
         {subMode === 'reservations' && (
           <View style={styles.card}>
             <Text style={styles.cardTitle}>
@@ -958,7 +1147,7 @@ export const FrontDeskScreen: React.FC = () => {
             </Text>
             {filteredReservations.length === 0 ? (
               <Text style={styles.emptyText}>
-                No advance reservations match this filter. Tap "All Records" above to view all.
+                No advance reservations match this filter. Tap "All" above to view all.
               </Text>
             ) : (
               filteredReservations.map((b) => {
@@ -966,8 +1155,8 @@ export const FrontDeskScreen: React.FC = () => {
                   b.isWithoutGst === true ||
                   (b.gstRate !== undefined && Number(b.gstRate) <= 0);
                 return (
-                  <View key={b.id} style={styles.inhouseRow}>
-                    <View style={{ flex: 1, marginRight: 8 }}>
+                  <View key={b.id} style={styles.stayCard}>
+                    <View style={{ flex: 1 }}>
                       <Text style={styles.inhouseGuest}>
                         Rm {b.roomNumber} — {b.guestName}
                       </Text>
@@ -976,16 +1165,25 @@ export const FrontDeskScreen: React.FC = () => {
                         {noGst ? 'Without GST' : `GST ${b.gstRate || defaultGst}%`}
                       </Text>
                       <Text style={styles.inhouseDue}>
-                        Advance: ₹{b.advanceAmount ?? 0} | Total: ₹
-                        {b.totalPayable || b.bookingAmount || 0}
+                        Advance: ₹{formatMoney(b.advanceAmount ?? 0)} | Total: ₹
+                        {formatMoney(b.totalPayable || b.bookingAmount || 0)}
                       </Text>
                     </View>
-                    <TouchableOpacity
-                      onPress={() => loadAdvanceBookingIntoCheckIn(b)}
-                      style={[styles.checkoutBtn, { backgroundColor: COLORS.emerald }]}
-                    >
-                      <Text style={[styles.checkoutBtnText, { color: '#FFF' }]}>Check-In</Text>
-                    </TouchableOpacity>
+                    <View style={styles.stayCardActions}>
+                      <TouchableOpacity
+                        onPress={() => handlePrintGrc(b, null)}
+                        style={styles.grcBtn}
+                      >
+                        <Printer size={12} color={COLORS.espresso} />
+                        <Text style={styles.grcBtnText}>Print / Share GRC</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => loadAdvanceBookingIntoCheckIn(b)}
+                        style={[styles.checkoutBtn, { backgroundColor: COLORS.emerald }]}
+                      >
+                        <Text style={[styles.checkoutBtnText, { color: '#FFF' }]}>Check-In</Text>
+                      </TouchableOpacity>
+                    </View>
                   </View>
                 );
               })
@@ -993,46 +1191,254 @@ export const FrontDeskScreen: React.FC = () => {
           </View>
         )}
 
-        {/* Active In-House Guests & Checkout */}
+        {/* Active In-House Guests & Checkout + Print/Share GRC + Quick Water Bottle Log */}
         {subMode === 'inhouse' && (
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>In-House Guests Ready for Checkout</Text>
+            <View style={styles.inhouseTopRow}>
+              <Text style={[styles.cardTitle, { marginBottom: 0, flex: 1 }]}>
+                In-House Guests ({activeInHouseList.length})
+              </Text>
+              <TouchableOpacity
+                onPress={() => openWaterModalForStay()}
+                style={styles.waterHeaderBtn}
+              >
+                <Droplets size={13} color={COLORS.blue} />
+                <Text style={styles.waterHeaderBtnText}>+ Log Water</Text>
+              </TouchableOpacity>
+            </View>
             {activeInHouseList.length === 0 ? (
               <Text style={styles.emptyText}>No active checked-in rooms right now.</Text>
             ) : (
               activeInHouseList
                 .filter((b) => {
-                  if (!matchesQuickDateFilter(b.checkInDate, dateFilter)) return false;
+                  if (!matchesQuickDateFilter(b.checkInDate, dateFilter, fromDate, toDate)) {
+                    return false;
+                  }
                   if (searchQuery.trim()) {
                     const q = searchQuery.toLowerCase();
-                    return `${b.guestName} ${b.roomNumber}`.toLowerCase().includes(q);
+                    return `${b.guestName} ${b.roomNumber} ${b.mobile || ''}`
+                      .toLowerCase()
+                      .includes(q);
                   }
                   return true;
                 })
                 .map((b) => {
-                  const noGst =
-                    b.isWithoutGst === true ||
-                    (b.gstRate !== undefined && Number(b.gstRate) <= 0);
+                  const chk = state.checkins.find((c) => c.bookingId === b.id || c.id === b.id);
+                  const liveStay = buildStayBill({
+                    booking: b,
+                    checkin: chk,
+                    posOrders: state.posOrders,
+                    laundryOrders: state.laundryOrders,
+                    waterBottles: state.waterBottles,
+                    rooms: state.rooms,
+                    settings: billSettings,
+                  });
                   return (
-                    <View key={b.id} style={styles.inhouseRow}>
-                      <View style={{ flex: 1, marginRight: 8 }}>
+                    <View key={b.id} style={styles.stayCard}>
+                      <View style={{ flex: 1 }}>
                         <Text style={styles.inhouseGuest}>
                           Rm {b.roomNumber} — {b.guestName}
                         </Text>
                         <Text style={styles.inhouseSub}>
                           {b.checkInDate} → {b.checkOutDate} •{' '}
-                          {noGst ? 'Without GST' : `GST ${b.gstRate || defaultGst}%`}
+                          {liveStay.bill.isGstInvoice
+                            ? `GST ${liveStay.bill.headlineGstRate}%`
+                            : 'Without GST'}
+                          {chk?.grcNumber ? ` • ${chk.grcNumber}` : ''}
                         </Text>
                         <Text style={styles.inhouseDue}>
-                          Paid: ₹{b.amountPaid ?? b.advanceAmount ?? 0} | Due: ₹{b.dueAmount ?? 0}
+                          Bill: ₹{formatMoney(liveStay.bill.grandTotal)} | Paid: ₹
+                          {formatMoney(liveStay.bill.receipts)} | Due: ₹
+                          {formatMoney(liveStay.bill.balance)}
                         </Text>
                       </View>
+
+                      <View style={styles.stayCardActions}>
+                        <TouchableOpacity
+                          onPress={() => handlePrintGrc(b, chk)}
+                          style={styles.grcBtn}
+                        >
+                          <Printer size={12} color={COLORS.espresso} />
+                          <Text style={styles.grcBtnText}>Print / Share GRC</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          onPress={() => handleShareGrc(b, chk)}
+                          style={styles.grcShareIconBtn}
+                        >
+                          <Share2 size={13} color={COLORS.indigo} />
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          onPress={() => openWaterModalForStay(b)}
+                          style={styles.waterMiniBtn}
+                        >
+                          <Droplets size={12} color={COLORS.blue} />
+                          <Text style={styles.waterMiniBtnText}>Water</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          onPress={() => openCheckoutModal(b)}
+                          style={styles.checkoutBtn}
+                        >
+                          <Text style={styles.checkoutBtnText}>Checkout</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  );
+                })
+            )}
+          </View>
+        )}
+
+        {/* Water Bottle Calculation Card & Register */}
+        {subMode === 'water' && (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Water Bottle Calculator & Folio Log</Text>
+            <Text style={{ fontSize: 12, color: COLORS.textSecondary, marginBottom: 10 }}>
+              Total Bottles − Free Complimentary Bottles = Chargeable Bottles × ₹Rate (auto-posted
+              to guest stay folio).
+            </Text>
+
+            {activeInHouseList.length > 0 && (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={{ marginBottom: 10 }}
+              >
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                  {activeInHouseList.map((b) => {
+                    const sel = wbRoom === b.roomNumber;
+                    return (
                       <TouchableOpacity
-                        onPress={() => openCheckoutModal(b)}
-                        style={styles.checkoutBtn}
+                        key={b.id}
+                        onPress={() => {
+                          const chk = state.checkins.find(
+                            (c) => c.bookingId === b.id || c.id === b.id
+                          );
+                          setWbRoom(b.roomNumber);
+                          setWbGuestName(b.guestName);
+                          setWbBookingId(b.id);
+                          setWbCheckInId(chk?.id || '');
+                        }}
+                        style={[styles.roomChip, sel && styles.roomChipSelected]}
                       >
-                        <Text style={styles.checkoutBtnText}>Checkout</Text>
+                        <Text style={[styles.roomChipNum, sel && { color: COLORS.goldBright }]}>
+                          Rm {b.roomNumber}
+                        </Text>
+                        <Text style={[styles.roomChipSub, sel && { color: '#FFF' }]}>
+                          {b.guestName}
+                        </Text>
                       </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </ScrollView>
+            )}
+
+            <View style={styles.twoCol}>
+              <View style={{ flex: 0.9 }}>
+                <Text style={styles.inputLabel}>Room No. *</Text>
+                <TextInput
+                  value={wbRoom}
+                  onChangeText={setWbRoom}
+                  placeholder="101"
+                  style={styles.input}
+                />
+              </View>
+              <View style={{ flex: 1.4 }}>
+                <Text style={styles.inputLabel}>Guest Name</Text>
+                <TextInput
+                  value={wbGuestName}
+                  onChangeText={setWbGuestName}
+                  placeholder="In-House Guest"
+                  style={styles.input}
+                />
+              </View>
+            </View>
+
+            <View style={styles.twoCol}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.inputLabel}>Total Bottles</Text>
+                <TextInput
+                  value={wbTotalBottles}
+                  onChangeText={setWbTotalBottles}
+                  keyboardType="numeric"
+                  placeholder="3"
+                  style={styles.input}
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.inputLabel}>Free Bottles</Text>
+                <TextInput
+                  value={wbFreeBottles}
+                  onChangeText={setWbFreeBottles}
+                  keyboardType="numeric"
+                  placeholder="1"
+                  style={styles.input}
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.inputLabel}>Rate (₹)</Text>
+                <TextInput
+                  value={wbRate}
+                  onChangeText={setWbRate}
+                  keyboardType="numeric"
+                  placeholder="20"
+                  style={styles.input}
+                />
+              </View>
+            </View>
+
+            <View style={styles.waterCalcBanner}>
+              <Text style={styles.waterCalcFormula}>
+                {wbTotalN} Total − {wbFreeN} Free = {wbChargeableN} Chargeable × ₹{wbRateN}
+              </Text>
+              <Text style={styles.waterCalcTotal}>₹{formatMoney(wbTotalCharge)}</Text>
+            </View>
+
+            <TouchableOpacity
+              onPress={() => handleSaveWaterBottles(false)}
+              style={[styles.primaryActionBtn, { marginBottom: 14 }]}
+            >
+              <Text style={styles.primaryActionText}>+ Post Water Bottles to Room Folio</Text>
+            </TouchableOpacity>
+
+            <Text style={styles.cardTitle}>Recent Water Bottle Logs ({waterBottleLogs.length})</Text>
+            {waterBottleLogs.filter((w) =>
+              matchesQuickDateFilter(w.date, dateFilter, fromDate, toDate)
+            ).length === 0 ? (
+              <Text style={styles.emptyText}>No water bottle logs for selected date filter.</Text>
+            ) : (
+              waterBottleLogs
+                .filter((w) => matchesQuickDateFilter(w.date, dateFilter, fromDate, toDate))
+                .map((w) => {
+                  const free = Number(w.complimentaryCount ?? w.complimentaryQty ?? 0);
+                  const chg = Number(w.extraChargeableCount ?? w.chargeableQty ?? w.quantity ?? 0);
+                  const tot = Number(w.totalBottles ?? free + chg);
+                  const rt = Number(w.unitPrice ?? w.ratePerBottle ?? billSettings.waterBottleRate);
+                  const amt = Number(w.chargeAmount ?? w.totalAmount ?? w.totalCharge ?? w.amount ?? 0);
+                  return (
+                    <View key={w.id} style={styles.inhouseRow}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.inhouseGuest}>
+                          Rm {w.roomNumber} — {w.guestName || 'Guest'}
+                        </Text>
+                        <Text style={styles.inhouseSub}>
+                          Total {tot} • Free {free} • Chargeable {chg} × ₹{rt}
+                        </Text>
+                        <Text style={styles.inhouseSub}>
+                          {w.date} {w.loggedBy ? `• By ${w.loggedBy}` : ''}
+                        </Text>
+                      </View>
+                      <Text
+                        style={[
+                          styles.sumVal,
+                          { color: amt > 0 ? COLORS.goldDark : COLORS.emerald },
+                        ]}
+                      >
+                        {amt > 0 ? `₹${formatMoney(amt)}` : 'Complimentary'}
+                      </Text>
                     </View>
                   );
                 })
@@ -1047,7 +1453,8 @@ export const FrontDeskScreen: React.FC = () => {
               Extra Services / Categories ({serviceCatalog.length})
             </Text>
             <Text style={{ fontSize: 12, color: COLORS.textSecondary, marginBottom: 10 }}>
-              Add extra service categories here — they appear automatically in Advance Booking & Guest Check-In.
+              Add extra service categories here — they appear automatically in Advance Booking &
+              Guest Check-In.
             </Text>
             <View style={styles.twoCol}>
               <View style={{ flex: 1.5 }}>
@@ -1107,48 +1514,152 @@ export const FrontDeskScreen: React.FC = () => {
             <Text style={styles.cardTitle}>
               Foreign Guest Police Form-C Register ({foreignCheckins.length})
             </Text>
-            {foreignCheckins.length === 0 ? (
+            {foreignCheckins.filter((c) =>
+              matchesQuickDateFilter(c.checkInDate, dateFilter, fromDate, toDate)
+            ).length === 0 ? (
               <Text style={styles.emptyText}>No foreign national Form-C entries recorded yet.</Text>
             ) : (
-              foreignCheckins.map((c) => (
-                <View key={c.id} style={styles.inhouseRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.inhouseGuest}>
-                      {c.guestName} ({c.nationality || 'Foreign'}) — Rm {c.roomNumber}
-                    </Text>
-                    <Text style={styles.inhouseSub}>
-                      Passport: {c.cFormData?.passportNumber || 'N/A'} • Visa:{' '}
-                      {c.cFormData?.visaNumber || 'N/A'}
-                    </Text>
-                    <Text style={styles.inhouseDue}>
-                      Stay: {c.checkInDate} → {c.checkOutDate}
-                    </Text>
+              foreignCheckins
+                .filter((c) => matchesQuickDateFilter(c.checkInDate, dateFilter, fromDate, toDate))
+                .map((c) => (
+                  <View key={c.id} style={styles.inhouseRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.inhouseGuest}>
+                        {c.guestName} ({c.nationality || 'Foreign'}) — Rm {c.roomNumber}
+                      </Text>
+                      <Text style={styles.inhouseSub}>
+                        Passport: {c.cFormData?.passportNumber || 'N/A'} • Visa:{' '}
+                        {c.cFormData?.visaNumber || 'N/A'}
+                      </Text>
+                      <Text style={styles.inhouseDue}>
+                        Stay: {c.checkInDate} → {c.checkOutDate}
+                      </Text>
+                    </View>
+                    <TouchableOpacity
+                      onPress={() => handlePrintGrc(null, c)}
+                      style={styles.grcBtn}
+                    >
+                      <Printer size={12} color={COLORS.espresso} />
+                      <Text style={styles.grcBtnText}>GRC</Text>
+                    </TouchableOpacity>
                   </View>
-                </View>
-              ))
+                ))
             )}
           </View>
         )}
       </ScrollView>
 
-      {/* Checkout Clearance Modal (Auto-alerts Housekeeping Room Dirty!) */}
+      {/* Water Bottle Calculation Modal (Quick Launch from In-House Card) */}
+      <Modal visible={waterModalOpen} transparent animationType="slide">
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalSheet}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <Text style={[styles.cardTitle, { marginBottom: 0 }]}>
+                Water Bottle Calculator — Rm {wbRoom}
+              </Text>
+              <TouchableOpacity onPress={() => setWaterModalOpen(false)}>
+                <X size={20} color={COLORS.textSecondary} />
+              </TouchableOpacity>
+            </View>
+            {wbGuestName ? (
+              <Text style={{ fontSize: 12, color: COLORS.textSecondary, marginBottom: 10 }}>
+                Guest: {wbGuestName}
+              </Text>
+            ) : null}
+
+            <View style={styles.twoCol}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.inputLabel}>Total Bottles</Text>
+                <TextInput
+                  value={wbTotalBottles}
+                  onChangeText={setWbTotalBottles}
+                  keyboardType="numeric"
+                  style={styles.input}
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.inputLabel}>Free Bottles</Text>
+                <TextInput
+                  value={wbFreeBottles}
+                  onChangeText={setWbFreeBottles}
+                  keyboardType="numeric"
+                  style={styles.input}
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.inputLabel}>Rate (₹)</Text>
+                <TextInput
+                  value={wbRate}
+                  onChangeText={setWbRate}
+                  keyboardType="numeric"
+                  style={styles.input}
+                />
+              </View>
+            </View>
+
+            <View style={styles.waterCalcBanner}>
+              <Text style={styles.waterCalcFormula}>
+                {wbTotalN} Total − {wbFreeN} Free = {wbChargeableN} Chargeable × ₹{wbRateN}
+              </Text>
+              <Text style={styles.waterCalcTotal}>₹{formatMoney(wbTotalCharge)}</Text>
+            </View>
+
+            <View style={styles.twoCol}>
+              <TouchableOpacity
+                onPress={() => setWaterModalOpen(false)}
+                style={styles.cancelModalBtn}
+              >
+                <Text style={styles.cancelModalText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => handleSaveWaterBottles(true)}
+                style={[styles.primaryActionBtn, { flex: 1.5 }]}
+              >
+                <Text style={styles.primaryActionText}>Save to Room Folio</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Checkout Clearance Modal (Uses Single Bill Calculator buildStayBill!) */}
       <Modal visible={Boolean(checkoutTarget)} transparent animationType="slide">
         <View style={styles.modalBackdrop}>
           <View style={styles.modalSheet}>
             {checkoutTarget &&
               (() => {
+                const matchedChk = state.checkins.find(
+                  (c) => c.bookingId === checkoutTarget.id || c.id === checkoutTarget.id
+                );
                 const existingInv = state.invoices.find(
                   (i) => i.bookingId === checkoutTarget.id && !i.isSeparateInvoice
                 );
-                const baseRm = Number(
-                  checkoutTarget.roomSubtotal || checkoutTarget.bookingAmount || 0
-                );
-                const extraN = Number(coExtraAmt) || 0;
-                const discN = Number(coDiscount) || 0;
-                const txBase = Math.max(0, baseRm + extraN - discN);
-                const effR = coWithGst ? defaultGst : 0;
-                const txAmt = effR > 0 ? Math.round(((txBase * effR) / 100) * 100) / 100 : 0;
-                const gTot = Math.round((txBase + txAmt) * 100) / 100;
+                const extraN = Math.max(0, Number(coExtraAmt) || 0);
+                const discN = Math.max(0, Number(coDiscount) || 0);
+                const stayPreview = buildStayBill({
+                  booking: checkoutTarget,
+                  checkin: matchedChk,
+                  posOrders: state.posOrders,
+                  laundryOrders: state.laundryOrders,
+                  waterBottles: state.waterBottles,
+                  rooms: state.rooms,
+                  settings: billSettings,
+                  additionalCharges:
+                    extraN > 0
+                      ? [
+                          {
+                            id: 'co-extra-preview',
+                            kind: 'other',
+                            description: 'Additional Checkout Charges',
+                            amount: extraN,
+                            roomNumber: checkoutTarget.roomNumber,
+                          },
+                        ]
+                      : [],
+                  gstEnabledOverride: coWithGst,
+                  discountOverride: discN,
+                });
+                const b = stayPreview.bill;
 
                 return (
                   <>
@@ -1161,7 +1672,7 @@ export const FrontDeskScreen: React.FC = () => {
                         <Lock size={14} color={COLORS.amber} />
                         <Text style={styles.lockedText}>
                           Locked Invoice ({existingInv.invoiceNumber}):{' '}
-                          {coWithGst ? `GST (${defaultGst}%)` : 'Without GST'}
+                          {coWithGst ? `GST (${b.headlineGstRate}%)` : 'Without GST'}
                         </Text>
                       </View>
                     ) : (
@@ -1181,17 +1692,26 @@ export const FrontDeskScreen: React.FC = () => {
                           <Square size={19} color={COLORS.textSecondary} />
                         )}
                         <Text style={styles.gstSingleTitle}>
-                          GST Invoice ({coWithGst ? `${defaultGst}% GST` : 'Without GST 0%'})
+                          GST Invoice ({coWithGst ? `${defaultGst}% Room GST` : 'Without GST 0%'})
                         </Text>
                       </TouchableOpacity>
                     )}
 
-                    <View style={[styles.twoCol, { marginTop: 10 }]}>
+                    <View style={[styles.twoCol, { marginTop: 6 }]}>
                       <View style={{ flex: 1 }}>
                         <Text style={styles.inputLabel}>Extra Charges (₹)</Text>
                         <TextInput
                           value={coExtraAmt}
                           onChangeText={setCoExtraAmt}
+                          keyboardType="numeric"
+                          style={styles.input}
+                        />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.inputLabel}>Discount (₹)</Text>
+                        <TextInput
+                          value={coDiscount}
+                          onChangeText={setCoDiscount}
                           keyboardType="numeric"
                           style={styles.input}
                         />
@@ -1209,8 +1729,67 @@ export const FrontDeskScreen: React.FC = () => {
 
                     <View style={styles.summaryBox}>
                       <View style={styles.sumRow}>
-                        <Text style={styles.sumLabel}>Final Bill Total:</Text>
-                        <Text style={styles.sumTotalVal}>₹{gTot.toLocaleString('en-IN')}</Text>
+                        <Text style={styles.sumLabel}>Room & Stay Charges:</Text>
+                        <Text style={styles.sumVal}>
+                          ₹
+                          {formatMoney(
+                            b.legacy.roomCharges +
+                              b.legacy.extraBedCharges +
+                              b.legacy.extraPersonCharges +
+                              b.legacy.earlyCheckInCharges +
+                              b.legacy.lateCheckOutCharges
+                          )}
+                        </Text>
+                      </View>
+                      {b.legacy.foodCharges > 0 && (
+                        <View style={styles.sumRow}>
+                          <Text style={styles.sumLabel}>Food / POS (Pre-Tax):</Text>
+                          <Text style={styles.sumVal}>₹{formatMoney(b.legacy.foodCharges)}</Text>
+                        </View>
+                      )}
+                      {b.legacy.waterCharges > 0 && (
+                        <View style={styles.sumRow}>
+                          <Text style={styles.sumLabel}>Water Bottles:</Text>
+                          <Text style={styles.sumVal}>₹{formatMoney(b.legacy.waterCharges)}</Text>
+                        </View>
+                      )}
+                      {b.legacy.laundryCharges + b.legacy.serviceCharges + b.legacy.otherCharges >
+                        0 && (
+                        <View style={styles.sumRow}>
+                          <Text style={styles.sumLabel}>Laundry / Extra Services:</Text>
+                          <Text style={styles.sumVal}>
+                            ₹
+                            {formatMoney(
+                              b.legacy.laundryCharges +
+                                b.legacy.serviceCharges +
+                                b.legacy.otherCharges
+                            )}
+                          </Text>
+                        </View>
+                      )}
+                      {b.discount > 0 && (
+                        <View style={styles.sumRow}>
+                          <Text style={styles.sumLabel}>Less Discount:</Text>
+                          <Text style={styles.sumVal}>- ₹{formatMoney(b.discount)}</Text>
+                        </View>
+                      )}
+                      {b.totalTax > 0 && (
+                        <View style={styles.sumRow}>
+                          <Text style={styles.sumLabel}>CGST + SGST:</Text>
+                          <Text style={styles.sumVal}>₹{formatMoney(b.totalTax)}</Text>
+                        </View>
+                      )}
+                      <View style={[styles.sumRow, styles.sumTotalRow]}>
+                        <Text style={styles.sumTotalLabel}>Final Bill Total:</Text>
+                        <Text style={styles.sumTotalVal}>₹{formatMoney(b.grandTotal)}</Text>
+                      </View>
+                      <View style={styles.sumRow}>
+                        <Text style={styles.sumLabel}>
+                          Prior Paid: ₹{formatMoney(b.receipts)} • Balance Before Now:
+                        </Text>
+                        <Text style={[styles.sumVal, { color: COLORS.rose }]}>
+                          ₹{formatMoney(b.balance)}
+                        </Text>
                       </View>
                     </View>
 
@@ -1230,14 +1809,71 @@ export const FrontDeskScreen: React.FC = () => {
                             extraChargeAmt: Number(coExtraAmt) || 0,
                             discount: Number(coDiscount) || 0,
                             withGst: coWithGst,
-                            gstRate: defaultGst,
                             collectedNow: Number(coCollectedNow) || 0,
                             paymentMethod: coPayMethod,
                           });
                           if (res.ok) {
                             Alert.alert(
-                              'Checked Out & Housekeeping Notified',
-                              `Room ${target.roomNumber} checked out and marked DIRTY. Instant notification sent to Housekeeping!`
+                              'Checked Out & Invoice Finalized',
+                              `Invoice ${res.invoice?.invoiceNumber || ''} generated. Room ${target.roomNumber} marked DIRTY.`,
+                              [
+                                { text: 'Close', style: 'cancel' },
+                                ...(res.invoice
+                                  ? [
+                                      {
+                                        text: 'Print / Download PDF',
+                                        onPress: () => {
+                                          const inv = res.invoice!;
+                                          const finalStay = buildStayBill({
+                                            booking: target,
+                                            checkin: matchedChk,
+                                            posOrders: state.posOrders,
+                                            laundryOrders: state.laundryOrders,
+                                            waterBottles: state.waterBottles,
+                                            rooms: state.rooms,
+                                            settings: billSettings,
+                                            additionalCharges:
+                                              extraN > 0
+                                                ? [
+                                                    {
+                                                      id: 'co-extra',
+                                                      kind: 'other',
+                                                      description: 'Additional Checkout Charges',
+                                                      amount: extraN,
+                                                      roomNumber: target.roomNumber,
+                                                    },
+                                                  ]
+                                                : [],
+                                            additionalPayments:
+                                              Number(coCollectedNow) > 0
+                                                ? [
+                                                    {
+                                                      id: 'co-pay',
+                                                      amount: Number(coCollectedNow),
+                                                      method: coPayMethod,
+                                                    },
+                                                  ]
+                                                : [],
+                                            gstEnabledOverride: coWithGst,
+                                            discountOverride: discN,
+                                          });
+                                          const html = renderInvoiceHtml(
+                                            toInvoicePrintData({
+                                              hotel: hotelProfile,
+                                              invoiceNumber: inv.invoiceNumber,
+                                              invoiceDate: inv.dateCreated,
+                                              booking: target,
+                                              checkin: matchedChk,
+                                              folio: finalStay.folio,
+                                              bill: finalStay.bill,
+                                            })
+                                          );
+                                          mobilePrint.printHtml(html, inv.invoiceNumber);
+                                        },
+                                      },
+                                    ]
+                                  : []),
+                              ]
                             );
                           } else {
                             Alert.alert('Checkout Error', res.error || 'Could not complete checkout');
@@ -1393,6 +2029,56 @@ const styles = StyleSheet.create({
   },
   roomChipNum: { fontSize: 12.5, fontWeight: '800', color: COLORS.textPrimary },
   roomChipSub: { fontSize: 10.5, color: COLORS.textSecondary, marginTop: 2 },
+  servicesBox: {
+    backgroundColor: '#F0FDFA',
+    borderWidth: 1,
+    borderColor: '#99F6E4',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+  },
+  servicesBoxHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  servicesBoxTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#0F766E',
+    letterSpacing: 0.4,
+  },
+  manageServicesBtn: {
+    backgroundColor: '#FFF',
+    borderWidth: 1,
+    borderColor: '#5EEAD4',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 8,
+  },
+  servicePickRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    marginBottom: 6,
+  },
+  servicePickRowActive: {
+    backgroundColor: '#ECFDF5',
+    borderColor: '#10B981',
+  },
+  servicePickName: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.espresso,
+    flex: 1,
+  },
   summaryBox: {
     backgroundColor: '#FAF8F4',
     borderRadius: 14,
@@ -1426,12 +2112,109 @@ const styles = StyleSheet.create({
   },
   primaryActionText: { fontSize: 13.5, fontWeight: '800', color: COLORS.goldBright },
   emptyText: { fontSize: 12.5, color: COLORS.textMuted, paddingVertical: 12 },
+  inhouseTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+    gap: 8,
+  },
+  waterHeaderBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: COLORS.blueSoft,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 9,
+  },
+  waterHeaderBtnText: {
+    fontSize: 11.5,
+    fontWeight: '800',
+    color: COLORS.blue,
+  },
+  stayCard: {
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9',
+    gap: 8,
+  },
+  stayCardActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 7,
+  },
+  grcBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: '#FAF3E0',
+    borderWidth: 1,
+    borderColor: COLORS.gold,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 9,
+  },
+  grcBtnText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: COLORS.espresso,
+  },
+  grcShareIconBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 9,
+    backgroundColor: COLORS.indigoSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  waterMiniBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: COLORS.blueSoft,
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+    borderRadius: 9,
+  },
+  waterMiniBtnText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: COLORS.blue,
+  },
+  waterCalcBanner: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 12,
+    gap: 8,
+  },
+  waterCalcFormula: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#1E3A8A',
+    flex: 1,
+  },
+  waterCalcTotal: {
+    fontSize: 15,
+    fontWeight: '900',
+    color: COLORS.blue,
+  },
   inhouseRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     paddingVertical: 11,
     borderTopWidth: 1,
     borderTopColor: '#F1F5F9',
+    gap: 8,
   },
   inhouseGuest: { fontSize: 13.5, fontWeight: '800', color: COLORS.textPrimary },
   inhouseSub: { fontSize: 11.5, color: COLORS.textSecondary, marginTop: 2 },
@@ -1439,8 +2222,8 @@ const styles = StyleSheet.create({
   checkoutBtn: {
     backgroundColor: COLORS.gold,
     paddingHorizontal: 13,
-    paddingVertical: 9,
-    borderRadius: 10,
+    paddingVertical: 8,
+    borderRadius: 9,
     flexShrink: 0,
   },
   checkoutBtnText: { fontSize: 12, fontWeight: '800', color: COLORS.espresso },

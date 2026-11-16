@@ -8,11 +8,12 @@ import {
   StyleSheet,
   Alert,
 } from 'react-native';
-import { CheckCircle2, Plus, Sparkles, UtensilsCrossed, Boxes, Globe2 } from 'lucide-react-native';
+import { CheckCircle2, Plus, Sparkles, UtensilsCrossed, Boxes, Globe2, Droplets } from 'lucide-react-native';
 import { usePms } from '../context/PmsContext';
 import { COLORS } from '../theme/colors';
 import { SubTabStrip } from '../components/SubTabStrip';
 import { DateFilterBar, matchesQuickDateFilter, QuickDateFilter } from '../components/DateFilterBar';
+import { formatMoney, normalizeBillSettings, r2 } from '../utils/billCalculator';
 
 interface Props {
   moduleId: 'housekeeping' | 'pos' | 'inventory' | 'otaManager';
@@ -21,10 +22,12 @@ interface Props {
 export const ServiceStoreModulesScreen: React.FC<Props> = ({ moduleId }) => {
   const {
     state,
+    hotelProfile,
     markHousekeepingTaskStatus,
     addHousekeepingTask,
     addLaundryOrder,
     addLostFoundItem,
+    addWaterBottleLog,
     updateRoomStatusOrRate,
     createPosOrder,
     addPosMenuItem,
@@ -36,13 +39,20 @@ export const ServiceStoreModulesScreen: React.FC<Props> = ({ moduleId }) => {
     upsertOtaChannel,
   } = usePms();
 
+  const billSettings = normalizeBillSettings(hotelProfile);
+
   const [dateFilter, setDateFilter] = useState<QuickDateFilter>('all');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
 
   // Housekeeping state
-  const [hkTab, setHkTab] = useState<'cleaning' | 'laundry' | 'lostfound'>('cleaning');
+  const [hkTab, setHkTab] = useState<'cleaning' | 'water' | 'laundry' | 'lostfound'>('cleaning');
   const [hkRoom, setHkRoom] = useState(state.rooms[0]?.number || '101');
   const [hkStaff, setHkStaff] = useState('Housekeeping Team');
+  const [wbTotal, setWbTotal] = useState('3');
+  const [wbFree, setWbFree] = useState('1');
+  const [wbRate, setWbRate] = useState(String(billSettings.waterBottleRate || 20));
   const [lnGuest, setLnGuest] = useState('');
   const [lnDesc, setLnDesc] = useState('Shirts & Trousers');
   const [lnAmt, setLnAmt] = useState('250');
@@ -83,8 +93,11 @@ export const ServiceStoreModulesScreen: React.FC<Props> = ({ moduleId }) => {
   // ---------------- 1. HOUSEKEEPING ----------------
   if (moduleId === 'housekeeping') {
     const dirtyRooms = state.rooms.filter((r) => r.status === 'Dirty');
+    const waterRecords = state.waterBottles.filter(
+      (w) => w.recordType !== 'service_catalog' && w.recordType !== 'service_allocation'
+    );
     const filteredLogs = state.cleaningLogs.filter((l) => {
-      if (!matchesQuickDateFilter(l.date, dateFilter)) return false;
+      if (!matchesQuickDateFilter(l.date, dateFilter, fromDate, toDate)) return false;
       if (searchQuery.trim()) {
         return `${l.roomNumber} ${l.assignedStaff} ${l.notes}`
           .toLowerCase()
@@ -92,6 +105,12 @@ export const ServiceStoreModulesScreen: React.FC<Props> = ({ moduleId }) => {
       }
       return true;
     });
+
+    const totalBtl = Math.max(0, Math.floor(Number(wbTotal) || 0));
+    const freeBtl = Math.max(0, Math.floor(Number(wbFree) || 0));
+    const chgBtl = Math.max(0, totalBtl - freeBtl);
+    const rateBtl = Math.max(0, Number(wbRate) || 0);
+    const chgAmt = r2(chgBtl * rateBtl);
 
     return (
       <View style={styles.root}>
@@ -105,6 +124,7 @@ export const ServiceStoreModulesScreen: React.FC<Props> = ({ moduleId }) => {
               count: dirtyRooms.length + state.cleaningLogs.filter((l) => l.status !== 'Completed').length,
               Icon: Sparkles,
             },
+            { id: 'water', label: 'Water Bottles', count: waterRecords.length, Icon: Droplets },
             { id: 'laundry', label: 'Laundry Desk', count: state.laundryOrders.length },
             { id: 'lostfound', label: 'Lost & Found', count: state.lostAndFound.length },
           ]}
@@ -112,6 +132,10 @@ export const ServiceStoreModulesScreen: React.FC<Props> = ({ moduleId }) => {
         <DateFilterBar
           activeFilter={dateFilter}
           onChangeFilter={setDateFilter}
+          fromDate={fromDate}
+          toDate={toDate}
+          onChangeFromDate={setFromDate}
+          onChangeToDate={setToDate}
           searchQuery={searchQuery}
           onChangeSearch={setSearchQuery}
           searchPlaceholder="Search room, staff, item..."
@@ -205,6 +229,100 @@ export const ServiceStoreModulesScreen: React.FC<Props> = ({ moduleId }) => {
                 )}
               </View>
             </>
+          )}
+
+          {hkTab === 'water' && (
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>Water Bottle Delivery & Folio Calculator</Text>
+              <View style={styles.twoCol}>
+                <TextInput
+                  value={hkRoom}
+                  onChangeText={setHkRoom}
+                  placeholder="Room No *"
+                  style={[styles.input, { flex: 1 }]}
+                />
+                <TextInput
+                  value={wbTotal}
+                  onChangeText={setWbTotal}
+                  keyboardType="numeric"
+                  placeholder="Total Bottles"
+                  style={[styles.input, { flex: 1 }]}
+                />
+              </View>
+              <View style={styles.twoCol}>
+                <TextInput
+                  value={wbFree}
+                  onChangeText={setWbFree}
+                  keyboardType="numeric"
+                  placeholder="Free Bottles"
+                  style={[styles.input, { flex: 1 }]}
+                />
+                <TextInput
+                  value={wbRate}
+                  onChangeText={setWbRate}
+                  keyboardType="numeric"
+                  placeholder="Rate ₹"
+                  style={[styles.input, { flex: 1 }]}
+                />
+              </View>
+              <View
+                style={{
+                  backgroundColor: '#EFF6FF',
+                  borderRadius: 10,
+                  padding: 10,
+                  marginBottom: 10,
+                  flexDirection: 'row',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                }}
+              >
+                <Text style={{ fontSize: 12, fontWeight: '700', color: '#1E3A8A' }}>
+                  {totalBtl} Total − {freeBtl} Free = {chgBtl} Chargeable × ₹{rateBtl}
+                </Text>
+                <Text style={{ fontSize: 14, fontWeight: '900', color: COLORS.blue }}>
+                  ₹{formatMoney(chgAmt)}
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={async () => {
+                  if (!hkRoom.trim() || totalBtl <= 0) return;
+                  await addWaterBottleLog({
+                    roomNumber: hkRoom.trim(),
+                    totalBottles: totalBtl,
+                    complimentaryQty: freeBtl,
+                    chargeableQty: chgBtl,
+                    ratePerBottle: rateBtl,
+                  });
+                  Alert.alert(
+                    'Saved',
+                    `Room ${hkRoom}: ${chgBtl} chargeable bottle(s) (₹${formatMoney(chgAmt)}) synced.`
+                  );
+                }}
+                style={styles.primaryBtn}
+              >
+                <Text style={styles.primaryBtnText}>+ Log Water Bottles</Text>
+              </TouchableOpacity>
+              {waterRecords
+                .filter((w) => matchesQuickDateFilter(w.date, dateFilter, fromDate, toDate))
+                .map((w) => {
+                  const free = Number(w.complimentaryCount ?? w.complimentaryQty ?? 0);
+                  const chg = Number(w.extraChargeableCount ?? w.chargeableQty ?? w.quantity ?? 0);
+                  const amt = Number(w.chargeAmount ?? w.totalAmount ?? w.totalCharge ?? w.amount ?? 0);
+                  return (
+                    <View key={w.id} style={styles.rowItem}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.rowTitle}>
+                          Rm {w.roomNumber} — {w.guestName || 'Guest'}
+                        </Text>
+                        <Text style={styles.rowSub}>
+                          Free {free} • Chargeable {chg} • {w.date}
+                        </Text>
+                      </View>
+                      <Text style={styles.amtText}>₹{formatMoney(amt)}</Text>
+                    </View>
+                  );
+                })}
+            </View>
           )}
 
           {hkTab === 'laundry' && (
@@ -345,6 +463,10 @@ export const ServiceStoreModulesScreen: React.FC<Props> = ({ moduleId }) => {
           <DateFilterBar
             activeFilter={dateFilter}
             onChangeFilter={setDateFilter}
+            fromDate={fromDate}
+            toDate={toDate}
+            onChangeFromDate={setFromDate}
+            onChangeToDate={setToDate}
             searchQuery={searchQuery}
             onChangeSearch={setSearchQuery}
             searchPlaceholder="Search order room, guest..."
@@ -446,7 +568,18 @@ export const ServiceStoreModulesScreen: React.FC<Props> = ({ moduleId }) => {
             <View style={styles.card}>
               <Text style={styles.cardTitle}>All Food Orders ({state.posOrders.length})</Text>
               {state.posOrders
-                .filter((o) => matchesQuickDateFilter(o.dateTime, dateFilter))
+                .filter((o) => {
+                  if (!matchesQuickDateFilter(o.date || o.dateTime, dateFilter, fromDate, toDate)) {
+                    return false;
+                  }
+                  if (searchQuery.trim()) {
+                    const q = searchQuery.toLowerCase();
+                    return `${o.roomNumber || ''} ${o.guestName || ''} ${o.orderNumber || ''}`
+                      .toLowerCase()
+                      .includes(q);
+                  }
+                  return true;
+                })
                 .map((ord) => (
                   <View key={ord.id} style={styles.rowItem}>
                     <View style={{ flex: 1 }}>

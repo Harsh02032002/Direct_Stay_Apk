@@ -35,6 +35,19 @@ import {
   logoutHotelAdminApi,
   syncLiveHotelDataApi,
 } from '../api/directStayApi';
+import {
+  BillCharge,
+  BillPayment,
+  calculateBill,
+  normalizeBillSettings,
+  r2,
+} from '../utils/billCalculator';
+import {
+  allocateGrcNumber,
+  allocateInvoiceNumber,
+  buildInvoiceRecord,
+  buildStayBill,
+} from '../utils/stayBilling';
 
 interface PmsContextValue {
   session: AdminSession | null;
@@ -63,7 +76,7 @@ interface PmsContextValue {
     ratePerNight: number;
     discount: number;
     withGst: boolean;
-    gstRate: number;
+    gstRate?: number;
     advanceAmount: number;
     paymentMethod: string;
     bookingSource: string;
@@ -98,14 +111,14 @@ interface PmsContextValue {
     ratePerNight: number;
     discount: number;
     withGst: boolean;
-    gstRate: number;
+    gstRate?: number;
     advanceAmount: number;
     paymentMethod: string;
     isCFormRequired?: boolean;
     cFormData?: GuestCheckIn['cFormData'];
     guestSignature?: string;
     bookedServices?: BookedServiceSelection[];
-  }) => Promise<{ ok: boolean; error?: string }>;
+  }) => Promise<{ ok: boolean; checkInId?: string; grcNumber?: string; error?: string }>;
   performCheckout: (input: {
     bookingOrCheckInId: string;
     extraChargeDesc?: string;
@@ -113,14 +126,14 @@ interface PmsContextValue {
     lateCheckOutCharge?: number;
     discount: number;
     withGst: boolean;
-    gstRate: number;
+    gstRate?: number;
     collectedNow: number;
     paymentMethod: string;
   }) => Promise<{ ok: boolean; invoice?: Invoice; error?: string }>;
   generateSeparateOrNewInvoice: (input: {
     bookingId: string;
     withGst: boolean;
-    gstRate: number;
+    gstRate?: number;
     includeServices: boolean;
   }) => Promise<{ ok: boolean; invoice?: Invoice; error?: string }>;
   updateRoomStatusOrRate: (roomId: string, status: RoomStatus, newRate?: number) => Promise<void>;
@@ -206,8 +219,14 @@ interface PmsContextValue {
   }) => Promise<void>;
   addWaterBottleLog: (input: {
     roomNumber: string;
+    totalBottles?: number;
     complimentaryQty: number;
-    chargeableQty: number;
+    chargeableQty?: number;
+    ratePerBottle?: number;
+    bookingId?: string;
+    checkInId?: string;
+    guestName?: string;
+    notes?: string;
   }) => Promise<void>;
   addExtraServiceCatalogItem: (serviceName: string, amount: number) => Promise<void>;
   addStaffMember: (input: {
@@ -334,19 +353,17 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const createAdvanceBooking: PmsContextValue['createAdvanceBooking'] = async (input) => {
     if (!session) return { ok: false, error: 'Not authenticated' };
+    const settings = normalizeBillSettings(hotelProfile);
     const selectedRooms =
       input.roomNumbers && input.roomNumbers.length > 0
         ? Array.from(new Set(input.roomNumbers.filter(Boolean)))
         : [input.roomNumber];
     const nights = calcNights(input.checkInDate, input.checkOutDate);
-    const defaultGst = Number(hotelProfile?.defaultGstRate) > 0 ? Number(hotelProfile?.defaultGstRate) : 5;
-    const effRate = input.withGst ? (Number(input.gstRate) > 0 ? Number(input.gstRate) : defaultGst) : 0;
     const todayStr = new Date().toISOString().slice(0, 10);
     const totalRoomsCount = Math.max(1, selectedRooms.length);
-    const perRoomDiscount = Math.round(((Math.max(0, Number(input.discount) || 0)) / totalRoomsCount) * 100) / 100;
-    const perRoomAdvance = Math.round(((Math.max(0, Number(input.advanceAmount) || 0)) / totalRoomsCount) * 100) / 100;
+    const perRoomDiscount = r2((Math.max(0, Number(input.discount) || 0)) / totalRoomsCount);
+    const perRoomAdvance = r2((Math.max(0, Number(input.advanceAmount) || 0)) / totalRoomsCount);
     const selectedServices = Array.isArray(input.bookedServices) ? input.bookedServices : [];
-    const totalServicesSum = selectedServices.reduce((s, item) => s + (Number(item.amount) || 0), 0);
 
     const createdBookings: Booking[] = selectedRooms.map((rmNo, idx) => {
       const matchedRoom = state.rooms.find((r) => r.number === rmNo);
@@ -354,17 +371,50 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         totalRoomsCount > 1 && matchedRoom?.rate
           ? Number(matchedRoom.rate)
           : Number(input.ratePerNight) || Number(matchedRoom?.rate || 2000);
-      const roomSub = Math.round(unitRate * nights * 100) / 100;
-      const roomServicesShare = idx === 0 ? totalServicesSum : 0;
-      const taxable = Math.max(0, roomSub + roomServicesShare - perRoomDiscount);
-      const gstAmt = effRate > 0 ? Math.round(((taxable * effRate) / 100) * 100) / 100 : 0;
-      const totalPayable = Math.round((taxable + gstAmt) * 100) / 100;
-      const due = Math.max(0, Math.round((totalPayable - perRoomAdvance) * 100) / 100);
+      const roomGross = r2(unitRate * nights);
+      const roomServices = idx === 0 ? selectedServices : [];
+      const charges: BillCharge[] = [
+        {
+          id: `room-${rmNo}`,
+          kind: 'room',
+          description: 'Room Charges',
+          amount: roomGross,
+          rate: unitRate,
+          nights,
+          roomNumber: rmNo,
+        },
+        ...roomServices.map((srv, sIdx) => ({
+          id: `srv-${sIdx}`,
+          kind: 'service' as const,
+          description: srv.serviceName,
+          amount: Number(srv.amount) || 0,
+          roomNumber: rmNo,
+        })),
+      ];
+      const previewBill = calculateBill({
+        charges,
+        payments: perRoomAdvance > 0 ? [{ id: 'adv', amount: perRoomAdvance, method: input.paymentMethod || 'UPI' }] : [],
+        discount: perRoomDiscount,
+        gstEnabled: Boolean(input.withGst),
+        settings,
+      });
+      const effRate = previewBill.headlineGstRate;
+      const gstAmt = previewBill.totalTax;
+      const totalPayable = previewBill.grandTotal;
+      const due = previewBill.balance;
       const bkgId = `BKG-${Date.now().toString().slice(-6)}${totalRoomsCount > 1 ? `-${idx + 1}` : ''}`;
 
       return {
         id: bkgId,
-        bookedServices: idx === 0 ? selectedServices : [],
+        bookedServices: roomServices,
+        otherServices: roomServices.map((srv, sIdx) => ({
+          id: `ALLOC-BKG-${bkgId}-${sIdx}`,
+          serviceType: 'Extra Service',
+          description: srv.serviceName,
+          amount: Number(srv.amount) || 0,
+          dateTime: todayStr,
+          roomNumber: rmNo,
+        })),
         bookingNo: bkgId,
         hotelId: session.hotelId,
         guestName: input.guestName.trim(),
@@ -374,21 +424,22 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         aadhaarNumber: input.aadhaarNumber.trim(),
         address: input.address.trim(),
         companyName: input.companyName?.trim() || '',
-        gstNumber: effRate > 0 ? input.gstNumber?.trim() || '' : '',
+        gstNumber: input.withGst ? input.gstNumber?.trim() || '' : '',
         checkInDate: input.checkInDate,
         checkOutDate: input.checkOutDate,
         nights,
         adults: Math.max(1, Number(input.adults) || 1),
         children: 0,
         roomNumber: rmNo,
+        roomNumbers: [rmNo],
         roomType: matchedRoom?.category || 'Deluxe',
-        bookingAmount: roomSub,
-        roomSubtotal: roomSub,
+        bookingAmount: roomGross,
+        roomSubtotal: roomGross,
         discountAmount: perRoomDiscount,
         gstRate: effRate,
         gstAmount: gstAmt,
-        isWithoutGst: effRate <= 0,
-        gstInvoice: effRate > 0,
+        isWithoutGst: !input.withGst,
+        gstInvoice: Boolean(input.withGst),
         taxRate: effRate,
         taxAmount: gstAmt,
         totalPayable,
@@ -430,45 +481,37 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const performCheckIn: PmsContextValue['performCheckIn'] = async (input) => {
     if (!session) return { ok: false, error: 'Not authenticated' };
+    const settings = normalizeBillSettings(hotelProfile);
     const nights = calcNights(input.checkInDate, input.checkOutDate);
-    const roomSub = Math.round(input.ratePerNight * nights * 100) / 100;
+    const roomGross = r2(input.ratePerNight * nights);
     const selectedServices = Array.isArray(input.bookedServices) ? input.bookedServices : [];
-    const servicesSum = selectedServices.reduce((s, item) => s + (Number(item.amount) || 0), 0);
-    const earlyLateSub =
-      Math.max(0, Number(input.earlyCheckInCharge) || 0) +
-      Math.max(0, Number(input.lateCheckOutCharge) || 0) +
-      Math.max(0, Number(input.extraBedCharge) || 0) +
-      servicesSum;
     const disc = Math.max(0, Number(input.discount) || 0);
-    const taxable = Math.max(0, roomSub + earlyLateSub - disc);
+    const adv = Math.max(0, Number(input.advanceAmount) || 0);
     const existingInv = input.linkedBookingId
       ? state.invoices.find((inv) => inv.bookingId === input.linkedBookingId && !inv.isSeparateInvoice)
       : undefined;
+    const linkedBkg = input.linkedBookingId
+      ? state.bookings.find((b) => b.id === input.linkedBookingId)
+      : undefined;
 
-    const defaultGst = Number(hotelProfile?.defaultGstRate) > 0 ? Number(hotelProfile?.defaultGstRate) : 5;
-    const effRate = input.withGst ? (Number(input.gstRate) > 0 ? Number(input.gstRate) : defaultGst) : 0;
-    const gstAmt = effRate > 0 ? Math.round(((taxable * effRate) / 100) * 100) / 100 : 0;
-    const totalPayable = Math.round((taxable + gstAmt) * 100) / 100;
-    const adv = Math.max(0, Number(input.advanceAmount) || 0);
-    const due = Math.max(0, Math.round((totalPayable - adv) * 100) / 100);
     const matchedRoom = state.rooms.find((r) => r.number === input.roomNumber);
     const checkInId = input.linkedBookingId || `CHK-${Date.now().toString().slice(-6)}`;
+    const existingGrcs = [
+      ...state.checkins.map((c) => c.grcNumber),
+      ...state.bookings.map((b) => b.grcNumber),
+    ];
+    const grcNumber = linkedBkg?.grcNumber || allocateGrcNumber(existingGrcs, settings);
 
+    // Note: earlyCheckInCharge is stored on newCheckin.earlyCheckInCharge (collected directly by folioCollector),
+    // so we do NOT duplicate it into extraList.
     const extraList = [];
-    if (Number(input.earlyCheckInCharge) > 0) {
-      extraList.push({
-        id: `EXT-EARLY-${Date.now()}`,
-        category: 'Early Check-In',
-        description: `Early Check-In (${input.arrivalTime || ''})`,
-        amount: Number(input.earlyCheckInCharge),
-      });
-    }
     if (Number(input.lateCheckOutCharge) > 0) {
       extraList.push({
         id: `EXT-LATE-${Date.now()}`,
         category: 'Late Check-Out',
         description: `Late Check-Out (${input.departureTime || ''})`,
         amount: Number(input.lateCheckOutCharge),
+        date: input.checkInDate,
       });
     }
     if (Number(input.extraBedCharge) > 0) {
@@ -477,23 +520,90 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         category: 'Extra Bed',
         description: 'Extra Bed Charge',
         amount: Number(input.extraBedCharge),
+        date: input.checkInDate,
       });
     }
     selectedServices.forEach((srv, idx) => {
       if (Number(srv.amount) > 0) {
         extraList.push({
-          id: `ALLOC-CHK-${Date.now()}-${idx}`,
+          id: `ALLOC-CHK-${checkInId}-${idx}`,
           category: 'Extra Service',
           description: srv.serviceName,
           amount: Number(srv.amount),
+          date: input.checkInDate,
         });
       }
     });
+
+    const previewCharges: BillCharge[] = [
+      {
+        id: `room-${input.roomNumber}`,
+        kind: 'room',
+        description: 'Room Charges',
+        amount: roomGross,
+        rate: input.ratePerNight,
+        nights,
+        roomNumber: input.roomNumber,
+      },
+      ...(Number(input.earlyCheckInCharge) > 0
+        ? [
+            {
+              id: `early-${checkInId}`,
+              kind: 'early_checkin' as const,
+              description: 'Early Check-In Charges',
+              amount: Number(input.earlyCheckInCharge),
+              roomNumber: input.roomNumber,
+            },
+          ]
+        : []),
+      ...(Number(input.lateCheckOutCharge) > 0
+        ? [
+            {
+              id: `late-${checkInId}`,
+              kind: 'late_checkout' as const,
+              description: 'Late Check-Out Charges',
+              amount: Number(input.lateCheckOutCharge),
+              roomNumber: input.roomNumber,
+            },
+          ]
+        : []),
+      ...(Number(input.extraBedCharge) > 0
+        ? [
+            {
+              id: `xbed-${checkInId}`,
+              kind: 'extra_bed' as const,
+              description: 'Extra Bed Charges',
+              amount: Number(input.extraBedCharge),
+              roomNumber: input.roomNumber,
+            },
+          ]
+        : []),
+      ...selectedServices.map((srv, idx) => ({
+        id: `srv-${idx}`,
+        kind: 'service' as const,
+        description: srv.serviceName,
+        amount: Number(srv.amount) || 0,
+        roomNumber: input.roomNumber,
+      })),
+    ];
+
+    const previewBill = calculateBill({
+      charges: previewCharges,
+      payments: adv > 0 ? [{ id: 'adv', amount: adv, method: input.paymentMethod || 'Cash' }] : [],
+      discount: disc,
+      gstEnabled: Boolean(input.withGst),
+      settings,
+    });
+    const effRate = previewBill.headlineGstRate;
+    const gstAmt = previewBill.totalTax;
+    const totalPayable = previewBill.grandTotal;
+    const due = previewBill.balance;
 
     const newCheckin: GuestCheckIn = {
       id: checkInId,
       hotelId: session.hotelId,
       bookingId: input.linkedBookingId || checkInId,
+      grcNumber,
       guestName: input.guestName.trim(),
       mobile: input.mobile.trim(),
       phone: input.mobile.trim(),
@@ -508,10 +618,11 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       purposeOfVisit: input.purposeOfVisit || 'Leisure',
       mealPlan: input.mealPlan || 'EP',
       companyName: input.companyName?.trim() || '',
-      gstNumber: effRate > 0 ? input.gstNumber?.trim() || '' : '',
+      gstNumber: input.withGst ? input.gstNumber?.trim() || '' : '',
       roomNumber: input.roomNumber,
       roomType: matchedRoom?.category || 'Deluxe',
       roomRate: input.ratePerNight,
+      nights,
       checkInDate: input.checkInDate,
       arrivalTime: input.arrivalTime || '',
       checkOutDate: input.checkOutDate,
@@ -521,10 +632,13 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       extraBedCharge: Number(input.extraBedCharge) || 0,
       adults: Math.max(1, Number(input.adults) || 1),
       children: Math.max(0, Number(input.children) || 0),
+      discount: disc,
+      discountAmount: disc,
       advanceAmount: adv,
+      paymentMethod: input.paymentMethod || 'Cash',
       gstRate: effRate,
       gstAmount: gstAmt,
-      isWithoutGst: effRate <= 0,
+      isWithoutGst: !input.withGst,
       isCFormRequired: Boolean(input.isCFormRequired),
       cFormData: input.isCFormRequired ? input.cFormData : undefined,
       guestSignature: input.guestSignature || '',
@@ -540,16 +654,19 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         b.id === input.linkedBookingId
           ? {
               ...b,
+              grcNumber: b.grcNumber || grcNumber,
               status: 'Checked In',
               isCheckedIn: true,
               roomNumber: input.roomNumber,
+              otherServices: [],
               ...(existingInv
                 ? {}
                 : {
+                    discountAmount: disc,
                     gstRate: effRate,
                     gstAmount: gstAmt,
-                    isWithoutGst: effRate <= 0,
-                    gstInvoice: effRate > 0,
+                    isWithoutGst: !input.withGst,
+                    gstInvoice: Boolean(input.withGst),
                     taxRate: effRate,
                     taxAmount: gstAmt,
                     totalPayable,
@@ -564,29 +681,36 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const walkinBooking: Booking = {
         id: checkInId,
         bookingNo: checkInId,
+        grcNumber,
         hotelId: session.hotelId,
         guestName: input.guestName.trim(),
         customerName: input.guestName.trim(),
         mobile: input.mobile.trim(),
-        email: '',
+        email: input.email?.trim() || '',
+        idType: input.idType || 'Aadhaar Card',
+        idNumber: input.aadhaarNumber.trim(),
         aadhaarNumber: input.aadhaarNumber.trim(),
         address: input.address.trim(),
+        nationality: input.nationality || 'Indian',
         companyName: input.companyName?.trim() || '',
-        gstNumber: effRate > 0 ? input.gstNumber?.trim() || '' : '',
+        gstNumber: input.withGst ? input.gstNumber?.trim() || '' : '',
         checkInDate: input.checkInDate,
+        arrivalTime: input.arrivalTime || '',
         checkOutDate: input.checkOutDate,
+        departureTime: input.departureTime || '',
         nights,
         adults: Math.max(1, Number(input.adults) || 1),
-        children: 0,
+        children: Math.max(0, Number(input.children) || 0),
         roomNumber: input.roomNumber,
+        roomNumbers: [input.roomNumber],
         roomType: matchedRoom?.category || 'Deluxe',
-        bookingAmount: roomSub,
-        roomSubtotal: roomSub,
+        bookingAmount: roomGross,
+        roomSubtotal: roomGross,
         discountAmount: disc,
         gstRate: effRate,
         gstAmount: gstAmt,
-        isWithoutGst: effRate <= 0,
-        gstInvoice: effRate > 0,
+        isWithoutGst: !input.withGst,
+        gstInvoice: Boolean(input.withGst),
         taxRate: effRate,
         taxAmount: gstAmt,
         totalPayable,
@@ -623,40 +747,25 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       rooms: nextRooms,
     });
     setSyncing(false);
-    return res.ok ? { ok: true } : { ok: false, error: res.error };
+    return res.ok ? { ok: true, checkInId, grcNumber } : { ok: false, error: res.error };
   };
 
   const performCheckout: PmsContextValue['performCheckout'] = async (input) => {
     if (!session) return { ok: false, error: 'Not authenticated' };
     const bkg = state.bookings.find((b) => b.id === input.bookingOrCheckInId);
     const chk = state.checkins.find(
-      (c) => c.id === input.bookingOrCheckInId || c.bookingId === input.bookingOrCheckInId
+      (c) =>
+        c.id === input.bookingOrCheckInId ||
+        c.bookingId === input.bookingOrCheckInId ||
+        (bkg && c.bookingId === bkg.id)
     );
     if (!bkg && !chk) return { ok: false, error: 'Stay record not found' };
 
-    const targetId = bkg?.id || chk!.id;
-    const roomNumber = bkg?.roomNumber || chk!.roomNumber;
-    const guestName = bkg?.guestName || chk!.guestName;
-    const checkInDate = bkg?.checkInDate || chk!.checkInDate;
-    const checkOutDate = bkg?.checkOutDate || chk!.checkOutDate;
-    const nights = calcNights(checkInDate, checkOutDate);
-    const roomCharges =
-      Number(bkg?.roomSubtotal ?? bkg?.bookingAmount) || Number(chk?.roomRate || 0) * nights;
-
-    const existingPosTotal = state.posOrders
-      .filter((o) => o.roomNumber === roomNumber && o.paymentStatus !== 'Paid')
-      .reduce((s, o) => s + (Number(o.totalAmount) || 0), 0);
-    const checkInExtraTotal = (chk?.extraCharges || []).reduce(
-      (s, e) => s + (Number(e.amount) || 0),
-      0
-    );
-    const addedExtra =
-      Math.max(0, Number(input.extraChargeAmt) || 0) +
-      Math.max(0, Number(input.lateCheckOutCharge) || 0) +
-      checkInExtraTotal;
-    const foodAndExtra = existingPosTotal + addedExtra;
-    const disc = Math.max(0, Number(input.discount) || 0);
-    const taxable = Math.max(0, roomCharges + foodAndExtra - disc);
+    const settings = normalizeBillSettings(hotelProfile);
+    const targetId = bkg?.id || chk!.bookingId || chk!.id;
+    const roomNumber = chk?.roomNumber || bkg?.roomNumber || '';
+    const guestName = chk?.guestName || bkg?.guestName || 'Guest';
+    const todayStr = new Date().toISOString().slice(0, 10);
 
     const existingPrimaryInv = state.invoices.find(
       (inv) => inv.bookingId === targetId && !inv.isSeparateInvoice
@@ -666,69 +775,148 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         (existingPrimaryInv.gstRate !== undefined && Number(existingPrimaryInv.gstRate) <= 0) ||
         (existingPrimaryInv.gstRate === undefined && Number(existingPrimaryInv.gst || 0) <= 0)
       : false;
+    const effectiveWithGst = existingPrimaryInv ? !lockedExistingNoGst : Boolean(input.withGst);
 
-    const effGstRate = existingPrimaryInv
-      ? lockedExistingNoGst
-        ? 0
-        : Number(existingPrimaryInv.gstRate) || 5
-      : input.withGst
-      ? Number(input.gstRate) > 0
-        ? Number(input.gstRate)
-        : 5
-      : 0;
+    const additionalCharges: BillCharge[] = [];
+    if (Number(input.extraChargeAmt) > 0) {
+      additionalCharges.push({
+        id: `EXT-CO-${Date.now()}`,
+        kind: 'other',
+        description: input.extraChargeDesc?.trim() || 'Checkout Additional Charges',
+        amount: Number(input.extraChargeAmt),
+        date: todayStr,
+        roomNumber,
+      });
+    }
+    if (Number(input.lateCheckOutCharge) > 0) {
+      additionalCharges.push({
+        id: `EXT-LATE-CO-${Date.now()}`,
+        kind: 'late_checkout',
+        description: 'Late Check-Out Charges',
+        amount: Number(input.lateCheckOutCharge),
+        date: todayStr,
+        roomNumber,
+      });
+    }
 
-    const gstAmt = effGstRate > 0 ? Math.round(((taxable * effGstRate) / 100) * 100) / 100 : 0;
-    const cgst = Math.round((gstAmt / 2) * 100) / 100;
-    const sgst = Math.round((gstAmt - cgst) * 100) / 100;
-    const finalAmt = Math.round((taxable + gstAmt) * 100) / 100;
-    const priorPaid = Number(bkg?.amountPaid ?? bkg?.advanceAmount ?? chk?.advanceAmount ?? 0);
-    const totalPaid = Math.round((priorPaid + (Number(input.collectedNow) || 0)) * 100) / 100;
-    const pending = Math.max(0, Math.round((finalAmt - totalPaid) * 100) / 100);
-    const todayStr = new Date().toISOString().slice(0, 10);
-    const seqNo = String(state.invoices.length + 1).padStart(4, '0');
-    const invPrefix = (hotelProfile?.invoicePrefix || 'INV').trim();
-    const invId = existingPrimaryInv?.id || `${invPrefix}-${Date.now().toString().slice(-6)}`;
-    const invNumber =
-      existingPrimaryInv?.invoiceNumber || `${invPrefix}-${todayStr.replace(/-/g, '')}-${seqNo}`;
+    const additionalPayments: BillPayment[] = [];
+    if (Number(input.collectedNow) > 0) {
+      additionalPayments.push({
+        id: `PAY-CO-${Date.now()}`,
+        amount: Number(input.collectedNow),
+        method: input.paymentMethod || 'UPI',
+        date: todayStr,
+        note: 'Checkout Settlement',
+      });
+    }
 
-    const builtInvoice: Invoice = {
+    const { folio, bill } = buildStayBill({
+      booking: bkg,
+      checkin: chk,
+      posOrders: state.posOrders,
+      laundryOrders: state.laundryOrders,
+      waterBottles: state.waterBottles,
+      rooms: state.rooms,
+      settings,
+      additionalCharges,
+      additionalPayments,
+      gstEnabledOverride: effectiveWithGst,
+      discountOverride: Number(input.discount) || 0,
+    });
+
+    const allocated = existingPrimaryInv?.invoiceNumber
+      ? { invoiceNumber: existingPrimaryInv.invoiceNumber, sequence: settings.nextInvoiceSequence }
+      : allocateInvoiceNumber(state.invoices, settings);
+    const invId = existingPrimaryInv?.id || `INV-${Date.now().toString().slice(-6)}`;
+
+    const localInvoice = buildInvoiceRecord({
       id: invId,
-      invoiceNumber: invNumber,
+      invoiceNumber: allocated.invoiceNumber,
       hotelId: session.hotelId,
       bookingId: targetId,
       checkInId: chk?.id,
       guestName,
-      guestMobile: bkg?.mobile || chk?.mobile || '',
-      mobile: bkg?.mobile || chk?.mobile || '',
-      companyName: bkg?.companyName || chk?.companyName || '',
-      guestGstNumber: effGstRate > 0 ? bkg?.gstNumber || chk?.gstNumber || '' : '',
-      gstNumber: effGstRate > 0 ? bkg?.gstNumber || chk?.gstNumber || '' : '',
-      roomNumber,
-      checkInDate,
-      checkOutDate,
-      roomCharges,
-      foodCharges: existingPosTotal,
-      waterCharges: 0,
-      otherCharges: addedExtra,
-      subtotal: roomCharges + foodAndExtra,
-      discount: disc,
-      gstRate: effGstRate,
-      gst: gstAmt,
-      cgst,
-      sgst,
-      isWithoutGst: effGstRate <= 0,
+      guestMobile: chk?.mobile || chk?.phone || bkg?.mobile || '',
+      guestAddress: chk?.address || bkg?.address || '',
+      companyName: chk?.companyName || bkg?.companyName || '',
+      guestGstNumber: chk?.gstNumber || bkg?.gstNumber || '',
+      roomNumbers: folio.roomNumbers.length ? folio.roomNumbers : [roomNumber],
+      checkInDate: folio.checkInDate || bkg?.checkInDate || chk?.checkInDate || todayStr,
+      checkOutDate: folio.checkOutDate || bkg?.checkOutDate || chk?.checkOutDate || todayStr,
+      nights: folio.nights,
+      bill,
+      paymentMethod: input.paymentMethod || bkg?.paymentMethod || 'UPI',
       isSeparateInvoice: false,
-      invoiceType: effGstRate > 0 ? 'Tax Invoice' : 'Bill of Supply',
-      finalAmount: finalAmt,
-      advancePaid: totalPaid,
-      pendingAmount: pending,
-      isPaid: pending <= 0,
-      paymentStatus: pending <= 0 ? 'Paid' : totalPaid > 0 ? 'Partially Paid' : 'Unpaid',
-      invoiceStatus: 'Finalized',
-      paymentMethod: input.paymentMethod || 'UPI',
+      invoiceScope: 'Booking + Other Services',
       dateCreated: todayStr,
-      date: todayStr,
-    };
+      invoiceStatus: 'Finalized',
+    }) as Invoice;
+
+    const apiGen = await generateLiveInvoiceApi(session, {
+      id: localInvoice.id,
+      invoiceNumber: localInvoice.invoiceNumber,
+      bookingId: targetId,
+      checkInId: chk?.id,
+      guestName: localInvoice.guestName,
+      guestMobile: localInvoice.guestMobile,
+      companyName: localInvoice.companyName,
+      guestGstNumber: localInvoice.guestGstNumber,
+      gstNumber: localInvoice.gstNumber,
+      roomNumber: localInvoice.roomNumber,
+      checkInDate: localInvoice.checkInDate,
+      checkOutDate: localInvoice.checkOutDate,
+      nights: localInvoice.nights,
+      roomCharges: localInvoice.roomCharges,
+      overrideRoomCharges: localInvoice.roomCharges,
+      extraBedCharges: localInvoice.extraBedCharges,
+      extraPersonCharges: localInvoice.extraPersonCharges,
+      earlyCheckInCharges: localInvoice.earlyCheckInCharges,
+      lateCheckOutCharges: localInvoice.lateCheckOutCharges,
+      foodCharges: localInvoice.foodCharges,
+      overrideFoodCharges: localInvoice.foodCharges,
+      waterCharges: localInvoice.waterCharges,
+      laundryCharges: localInvoice.laundryCharges,
+      serviceCharges: localInvoice.serviceCharges,
+      fineCharges: localInvoice.fineCharges,
+      otherCharges: localInvoice.otherCharges,
+      discount: localInvoice.discount,
+      overrideDiscount: localInvoice.discount,
+      gstRate: localInvoice.gstRate,
+      overrideGstRate: localInvoice.gstRate,
+      foodGstRate: settings.foodGstRate,
+      isWithoutGst: localInvoice.isWithoutGst,
+      finalAmount: localInvoice.finalAmount,
+      advancePaid: localInvoice.advancePaid,
+      overrideAdvancePaid: localInvoice.advancePaid,
+      ledgerLines: localInvoice.ledgerLines,
+      taxRows: localInvoice.taxRows,
+      overridePaymentMethod: localInvoice.paymentMethod,
+      overrideInvoiceType: localInvoice.invoiceType,
+      createSeparateInvoice: false,
+      isSeparateInvoice: false,
+    });
+
+    const builtInvoice: Invoice =
+      apiGen.ok && apiGen.invoice
+        ? {
+            ...localInvoice,
+            ...apiGen.invoice,
+            invoiceStatus: 'Finalized',
+            dateCreated: localInvoice.dateCreated,
+            guestAddress: localInvoice.guestAddress,
+            roomNumbers: localInvoice.roomNumbers,
+            ledgerLines: localInvoice.ledgerLines,
+            taxRows: apiGen.invoice.taxRows || localInvoice.taxRows,
+            amountInWords: apiGen.invoice.amountInWords || localInvoice.amountInWords,
+          }
+        : localInvoice;
+
+    const effGstRate = bill.headlineGstRate;
+    const gstAmt = bill.totalTax;
+    const finalAmt = bill.grandTotal;
+    const totalPaid = bill.receipts;
+    const pending = bill.balance;
+    const dirtyRoomList = folio.roomNumbers.length ? folio.roomNumbers : [roomNumber];
 
     const nextBookings = state.bookings.map((b) =>
       b.id === targetId
@@ -736,35 +924,79 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             ...b,
             status: 'Checked Out',
             isCompleted: true,
+            discountAmount: bill.discount,
             gstRate: effGstRate,
             gstAmount: gstAmt,
-            isWithoutGst: effGstRate <= 0,
-            gstInvoice: effGstRate > 0,
+            isWithoutGst: !bill.isGstInvoice,
+            gstInvoice: bill.isGstInvoice,
             taxRate: effGstRate,
             taxAmount: gstAmt,
             totalPayable: finalAmt,
             amountPaid: totalPaid,
             advanceAmount: totalPaid,
             dueAmount: pending,
-            paymentStatus: (pending <= 0 ? 'Fully Paid' : 'Partially Paid') as Booking['paymentStatus'],
+            paymentMethod: input.paymentMethod || b.paymentMethod || 'UPI',
+            paymentStatus: (
+              pending <= 0 ? 'Fully Paid' : totalPaid > 0 ? 'Partially Paid' : 'Unpaid'
+            ) as Booking['paymentStatus'],
+            ...(Array.isArray(b.payments) && additionalPayments.length > 0
+              ? {
+                  payments: [
+                    ...b.payments,
+                    ...additionalPayments.map((p) => ({
+                      id: p.id,
+                      amount: p.amount,
+                      paymentMethod: p.method,
+                      date: p.date,
+                      notes: p.note,
+                    })),
+                  ],
+                }
+              : {}),
           }
         : b
     );
 
     const nextCheckins = state.checkins.map((c) =>
       c.id === chk?.id || c.bookingId === targetId
-        ? { ...c, status: 'Checked Out', checkedOutDateTime: new Date().toISOString() }
+        ? {
+            ...c,
+            status: 'Checked Out',
+            checkedOutDateTime: new Date().toISOString(),
+            discount: bill.discount,
+            discountAmount: bill.discount,
+            extraCharges: [
+              ...(c.extraCharges || []),
+              ...additionalCharges.map((ac) => ({
+                id: ac.id,
+                category: ac.kind === 'late_checkout' ? 'Late Check-Out' : 'Other',
+                description: ac.description,
+                amount: ac.amount,
+                date: ac.date,
+              })),
+            ],
+            payments: [
+              ...(c.payments || []),
+              ...additionalPayments.map((p) => ({
+                id: p.id,
+                amount: p.amount,
+                paymentMethod: p.method,
+                date: p.date,
+                notes: p.note,
+              })),
+            ],
+          }
         : c
     );
 
     const nextRooms = state.rooms.map((rm) =>
-      rm.number === roomNumber ? { ...rm, status: 'Dirty' as RoomStatus } : rm
+      dirtyRoomList.includes(rm.number) ? { ...rm, status: 'Dirty' as RoomStatus } : rm
     );
 
     const newHkTask: HousekeepingLog = {
       id: `HK-${Date.now().toString().slice(-6)}`,
       hotelId: session.hotelId,
-      roomNumber,
+      roomNumber: dirtyRoomList.join(', '),
       date: todayStr,
       assignedStaff: 'Housekeeping Team',
       cleaningType: 'Checkout Turnaround',
@@ -775,8 +1007,8 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const newNotif: AppNotificationItem = {
       id: `NTF-${Date.now().toString().slice(-6)}`,
       hotelId: session.hotelId,
-      title: `Room ${roomNumber} Checked Out — Dirty Alert`,
-      message: `Housekeeping Alert: Room ${roomNumber} (${guestName}) checked out and is now marked DIRTY for immediate turnaround cleaning.`,
+      title: `Room ${dirtyRoomList.join(', ')} Checked Out — Dirty Alert`,
+      message: `Housekeeping Alert: Room ${dirtyRoomList.join(', ')} (${guestName}) checked out and is now marked DIRTY for immediate turnaround cleaning.`,
       type: 'housekeeping',
       read: false,
       createdAt: new Date().toISOString(),
@@ -786,7 +1018,7 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const nextNotifications = [newNotif, ...state.notifications];
     const nextInvoices = existingPrimaryInv
       ? state.invoices.map((i) => (i.id === existingPrimaryInv.id ? builtInvoice : i))
-      : [builtInvoice, ...state.invoices];
+      : [builtInvoice, ...state.invoices.filter((i) => i.id !== builtInvoice.id)];
 
     setState((prev) => ({
       ...prev,
@@ -816,107 +1048,136 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   ) => {
     if (!session) return { ok: false, error: 'Not authenticated' };
     const bkg = state.bookings.find((b) => b.id === input.bookingId);
-    if (!bkg) return { ok: false, error: 'Booking not found' };
+    const chk = state.checkins.find(
+      (c) => c.bookingId === input.bookingId || c.id === input.bookingId
+    );
+    if (!bkg && !chk) return { ok: false, error: 'Booking not found' };
 
-    const existingForBooking = state.invoices.filter((inv) => inv.bookingId === bkg.id);
+    const targetId = bkg?.id || chk!.bookingId || chk!.id;
+    const settings = normalizeBillSettings(hotelProfile);
+    const existingForBooking = state.invoices.filter((inv) => inv.bookingId === targetId);
     const isSeparate = existingForBooking.length > 0;
     const todayStr = new Date().toISOString().slice(0, 10);
-    const seqNo = String(state.invoices.length + 1).padStart(4, '0');
+
+    const scopedBkg = !input.includeServices && bkg ? { ...bkg, otherServices: [] } : bkg;
+    const scopedChk =
+      !input.includeServices && chk
+        ? {
+            ...chk,
+            extraCharges: (chk.extraCharges || []).filter((ec) => {
+              const cat = String(ec.category || '').toLowerCase();
+              return (
+                cat.includes('extra bed') ||
+                cat.includes('early check') ||
+                cat.includes('late check')
+              );
+            }),
+          }
+        : chk;
+
+    const { folio, bill } = buildStayBill({
+      booking: scopedBkg,
+      checkin: scopedChk,
+      posOrders: input.includeServices ? state.posOrders : [],
+      laundryOrders: input.includeServices ? state.laundryOrders : [],
+      waterBottles: input.includeServices ? state.waterBottles : [],
+      rooms: state.rooms,
+      settings,
+      gstEnabledOverride: Boolean(input.withGst),
+    });
+
+    const allocated = allocateInvoiceNumber(state.invoices, settings);
     const newInvId = isSeparate
       ? `INV-SEP-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`
       : `INV-${Date.now().toString().slice(-6)}`;
-    const newInvNumber = `INV-${todayStr.replace(/-/g, '')}-${seqNo}`;
+    const primaryRoom = chk?.roomNumber || bkg?.roomNumber || '';
 
-    const roomCharges =
-      Number(bkg.roomSubtotal ?? bkg.bookingAmount) ||
-      calcNights(bkg.checkInDate, bkg.checkOutDate) * 2000;
-    const posCharges = input.includeServices
-      ? state.posOrders
-          .filter((o) => o.roomNumber === bkg.roomNumber && o.paymentStatus !== 'Paid')
-          .reduce((s, o) => s + (Number(o.totalAmount) || 0), 0)
-      : 0;
-    const disc = Number(bkg.discountAmount) || 0;
-    const taxable = Math.max(0, roomCharges + posCharges - disc);
-    const effRate = input.withGst ? (Number(input.gstRate) > 0 ? Number(input.gstRate) : 5) : 0;
-    const gstAmt = effRate > 0 ? Math.round(((taxable * effRate) / 100) * 100) / 100 : 0;
-    const cgst = Math.round((gstAmt / 2) * 100) / 100;
-    const sgst = Math.round((gstAmt - cgst) * 100) / 100;
-    const finalAmt = Math.round((taxable + gstAmt) * 100) / 100;
-    const paid = Number(bkg.amountPaid ?? bkg.advanceAmount ?? 0);
-    const pending = Math.max(0, Math.round((finalAmt - paid) * 100) / 100);
+    const localInvoice = buildInvoiceRecord({
+      id: newInvId,
+      invoiceNumber: allocated.invoiceNumber,
+      hotelId: session.hotelId,
+      bookingId: targetId,
+      checkInId: chk?.id,
+      guestName: chk?.guestName || bkg?.guestName || 'Guest',
+      guestMobile: chk?.mobile || chk?.phone || bkg?.mobile || '',
+      guestAddress: chk?.address || bkg?.address || '',
+      companyName: chk?.companyName || bkg?.companyName || '',
+      guestGstNumber: chk?.gstNumber || bkg?.gstNumber || '',
+      roomNumbers: folio.roomNumbers.length ? folio.roomNumbers : [primaryRoom],
+      checkInDate: folio.checkInDate || bkg?.checkInDate || chk?.checkInDate || todayStr,
+      checkOutDate: folio.checkOutDate || bkg?.checkOutDate || chk?.checkOutDate || todayStr,
+      nights: folio.nights,
+      bill,
+      paymentMethod: bkg?.paymentMethod || chk?.paymentMethod || 'UPI',
+      isSeparateInvoice: isSeparate,
+      parentInvoiceId: existingForBooking[0]?.id,
+      invoiceScope: input.includeServices ? 'Booking + Other Services' : 'Only Booking',
+      dateCreated: todayStr,
+      invoiceStatus: 'Generated',
+    }) as Invoice;
 
     const apiGen = await generateLiveInvoiceApi(session, {
-      id: newInvId,
-      invoiceNumber: newInvNumber,
-      bookingId: bkg.id,
-      guestName: bkg.guestName,
-      roomNumber: bkg.roomNumber,
-      checkInDate: bkg.checkInDate,
-      checkOutDate: bkg.checkOutDate,
-      overrideRoomCharges: roomCharges,
-      roomCharges,
-      overrideFoodCharges: posCharges,
-      foodCharges: posCharges,
-      overrideDiscount: disc,
-      discount: disc,
-      overrideGstRate: effRate,
-      gstRate: effRate,
-      isWithoutGst: effRate <= 0,
+      id: localInvoice.id,
+      invoiceNumber: localInvoice.invoiceNumber,
+      bookingId: targetId,
+      checkInId: chk?.id,
+      guestName: localInvoice.guestName,
+      guestMobile: localInvoice.guestMobile,
+      companyName: localInvoice.companyName,
+      guestGstNumber: localInvoice.guestGstNumber,
+      gstNumber: localInvoice.gstNumber,
+      roomNumber: localInvoice.roomNumber,
+      checkInDate: localInvoice.checkInDate,
+      checkOutDate: localInvoice.checkOutDate,
+      nights: localInvoice.nights,
+      roomCharges: localInvoice.roomCharges,
+      overrideRoomCharges: localInvoice.roomCharges,
+      extraBedCharges: localInvoice.extraBedCharges,
+      extraPersonCharges: localInvoice.extraPersonCharges,
+      earlyCheckInCharges: localInvoice.earlyCheckInCharges,
+      lateCheckOutCharges: localInvoice.lateCheckOutCharges,
+      foodCharges: localInvoice.foodCharges,
+      overrideFoodCharges: localInvoice.foodCharges,
+      waterCharges: localInvoice.waterCharges,
+      laundryCharges: localInvoice.laundryCharges,
+      serviceCharges: localInvoice.serviceCharges,
+      fineCharges: localInvoice.fineCharges,
+      otherCharges: localInvoice.otherCharges,
+      discount: localInvoice.discount,
+      overrideDiscount: localInvoice.discount,
+      gstRate: localInvoice.gstRate,
+      overrideGstRate: localInvoice.gstRate,
+      foodGstRate: settings.foodGstRate,
+      isWithoutGst: localInvoice.isWithoutGst,
+      finalAmount: localInvoice.finalAmount,
+      advancePaid: localInvoice.advancePaid,
+      overrideAdvancePaid: localInvoice.advancePaid,
+      ledgerLines: localInvoice.ledgerLines,
+      taxRows: localInvoice.taxRows,
       createSeparateInvoice: isSeparate,
       isSeparateInvoice: isSeparate,
       parentInvoiceId: existingForBooking[0]?.id,
-      overrideAdvancePaid: paid,
-      advancePaid: paid,
-      overridePaymentMethod: bkg.paymentMethod || 'UPI',
-      overrideInvoiceType: effRate > 0 ? 'Tax Invoice' : 'Bill of Supply',
+      overridePaymentMethod: localInvoice.paymentMethod,
+      overrideInvoiceType: localInvoice.invoiceType,
     });
 
     const finalInvoice: Invoice =
       apiGen.ok && apiGen.invoice
         ? {
+            ...localInvoice,
             ...apiGen.invoice,
-            isWithoutGst: effRate <= 0,
+            isWithoutGst: localInvoice.isWithoutGst,
             isSeparateInvoice: isSeparate,
-            gstRate: effRate,
+            gstRate: localInvoice.gstRate,
+            dateCreated: localInvoice.dateCreated,
+            guestAddress: localInvoice.guestAddress,
+            roomNumbers: localInvoice.roomNumbers,
+            invoiceScope: localInvoice.invoiceScope,
+            ledgerLines: localInvoice.ledgerLines,
+            taxRows: apiGen.invoice.taxRows || localInvoice.taxRows,
+            amountInWords: apiGen.invoice.amountInWords || localInvoice.amountInWords,
           }
-        : {
-            id: newInvId,
-            invoiceNumber: newInvNumber,
-            hotelId: session.hotelId,
-            bookingId: bkg.id,
-            guestName: bkg.guestName,
-            guestMobile: bkg.mobile,
-            mobile: bkg.mobile,
-            companyName: bkg.companyName,
-            guestGstNumber: effRate > 0 ? bkg.gstNumber : '',
-            gstNumber: effRate > 0 ? bkg.gstNumber : '',
-            roomNumber: bkg.roomNumber,
-            checkInDate: bkg.checkInDate,
-            checkOutDate: bkg.checkOutDate,
-            roomCharges,
-            foodCharges: posCharges,
-            waterCharges: 0,
-            otherCharges: 0,
-            subtotal: roomCharges + posCharges,
-            discount: disc,
-            gstRate: effRate,
-            gst: gstAmt,
-            cgst,
-            sgst,
-            isWithoutGst: effRate <= 0,
-            isSeparateInvoice: isSeparate,
-            parentInvoiceId: existingForBooking[0]?.id,
-            invoiceType: effRate > 0 ? 'Tax Invoice' : 'Bill of Supply',
-            finalAmount: finalAmt,
-            advancePaid: paid,
-            pendingAmount: pending,
-            isPaid: pending <= 0,
-            paymentStatus: pending <= 0 ? 'Paid' : paid > 0 ? 'Partially Paid' : 'Unpaid',
-            invoiceStatus: 'Generated',
-            paymentMethod: bkg.paymentMethod || 'UPI',
-            dateCreated: todayStr,
-            date: todayStr,
-          };
+        : localInvoice;
 
     const nextInvoices = [
       finalInvoice,
@@ -968,31 +1229,56 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const createPosOrder: PmsContextValue['createPosOrder'] = async (input) => {
     if (!session) return { ok: false, error: 'Not authenticated' };
     if (input.items.length === 0) return { ok: false, error: 'Cart is empty' };
-    const subtotal = input.items.reduce((s, i) => s + i.price * i.quantity, 0);
-    const taxAmt = Math.round(subtotal * 0.05 * 100) / 100;
-    const totalAmount = Math.round((subtotal + taxAmt) * 100) / 100;
+    const settings = normalizeBillSettings(hotelProfile);
+    const subtotal = r2(input.items.reduce((s, i) => s + i.price * i.quantity, 0));
+    const taxAmt = r2((subtotal * settings.foodGstRate) / 100);
+    const totalAmount = r2(subtotal + taxAmt);
+    const rmTrim = (input.roomNumber || '').trim();
+    const activeChk = input.postToRoom && rmTrim
+      ? state.checkins.find((c) => String(c.roomNumber) === rmTrim && c.status !== 'Checked Out')
+      : undefined;
+    const activeBkg = input.postToRoom && rmTrim
+      ? state.bookings.find(
+          (b) =>
+            (activeChk && b.id === activeChk.bookingId) ||
+            (String(b.roomNumber) === rmTrim &&
+              (b.isCheckedIn || b.status === 'Checked In') &&
+              !b.isCompleted &&
+              b.status !== 'Checked Out')
+        )
+      : undefined;
+    const nowIso = new Date().toISOString();
+    const todayStr = nowIso.slice(0, 10);
     const newOrder: PosOrder = {
       id: `POS-${Date.now().toString().slice(-6)}`,
       orderNumber: `KOT-${Date.now().toString().slice(-5)}`,
       hotelId: session.hotelId,
+      bookingId: activeBkg?.id || activeChk?.bookingId || undefined,
+      checkInId: activeChk?.id || undefined,
       orderType: input.postToRoom ? 'Room Service' : 'Dine In',
-      roomNumber: input.roomNumber || '',
-      guestName: input.guestName || 'Walk-in Diner',
+      roomNumber: rmTrim,
+      guestName:
+        input.guestName || activeChk?.guestName || activeBkg?.guestName || 'Walk-in Diner',
       items: input.items.map((it) => ({
         itemId: it.itemId,
         name: it.name,
         itemName: it.name,
         quantity: it.quantity,
         price: it.price,
-        total: it.price * it.quantity,
+        total: r2(it.price * it.quantity),
       })),
       subtotal,
       taxAmount: taxAmt,
+      gstAmount: taxAmt,
       totalAmount,
+      grandTotal: totalAmount,
+      postToRoomBill: input.postToRoom,
       paymentStatus: input.postToRoom ? 'Unpaid' : 'Paid',
       paymentMethod: input.postToRoom ? 'Room Folio' : input.paymentMethod || 'UPI',
       status: 'Completed',
-      dateTime: new Date().toISOString().slice(0, 16).replace('T', ' '),
+      date: todayStr,
+      createdAt: nowIso,
+      dateTime: nowIso.slice(0, 16).replace('T', ' '),
     };
     const nextOrders = [newOrder, ...state.posOrders];
     setState((prev) => ({ ...prev, posOrders: nextOrders }));
@@ -1055,13 +1341,34 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addLaundryOrder: PmsContextValue['addLaundryOrder'] = async (input) => {
     if (!session) return;
     const todayStr = new Date().toISOString().slice(0, 10);
+    const rmTrim = input.roomNumber.trim();
+    const activeChk = state.checkins.find(
+      (c) => String(c.roomNumber) === rmTrim && c.status !== 'Checked Out'
+    );
+    const activeBkg = state.bookings.find(
+      (b) =>
+        (activeChk && b.id === activeChk.bookingId) ||
+        (String(b.roomNumber) === rmTrim &&
+          (b.isCheckedIn || b.status === 'Checked In') &&
+          !b.isCompleted &&
+          b.status !== 'Checked Out')
+    );
+    const amt = r2(Number(input.amount) || 0);
+    const orderId = `LND-${Date.now().toString().slice(-6)}`;
     const order: LaundryOrder = {
-      id: `LND-${Date.now().toString().slice(-6)}`,
+      id: orderId,
+      orderNumber: orderId,
       hotelId: session.hotelId,
-      roomNumber: input.roomNumber.trim(),
-      guestName: input.guestName.trim() || 'Room Guest',
+      bookingId: activeBkg?.id || activeChk?.bookingId || undefined,
+      checkInId: activeChk?.id || undefined,
+      orderType: 'Guest Laundry',
+      roomNumber: rmTrim,
+      guestName:
+        input.guestName.trim() || activeChk?.guestName || activeBkg?.guestName || 'Room Guest',
       itemsSummary: input.itemsSummary.trim(),
-      amount: Number(input.amount) || 0,
+      amount: amt,
+      totalAmount: amt,
+      paymentStatus: 'Post to Room',
       status: 'In Wash',
       date: todayStr,
     };
@@ -1261,15 +1568,69 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const addWaterBottleLog: PmsContextValue['addWaterBottleLog'] = async (input) => {
     if (!session) return;
-    const todayStr = new Date().toISOString().slice(0, 10);
+    const settings = normalizeBillSettings(hotelProfile);
+    const rmTrim = input.roomNumber.trim();
+    const nowIso = new Date().toISOString();
+    const todayStr = nowIso.slice(0, 10);
+
+    const activeChk = input.checkInId
+      ? state.checkins.find((c) => c.id === input.checkInId)
+      : state.checkins.find((c) => String(c.roomNumber) === rmTrim && c.status !== 'Checked Out');
+    const activeBkg = input.bookingId
+      ? state.bookings.find((b) => b.id === input.bookingId)
+      : state.bookings.find(
+          (b) =>
+            (activeChk && b.id === activeChk.bookingId) ||
+            (String(b.roomNumber) === rmTrim &&
+              (b.isCheckedIn || b.status === 'Checked In') &&
+              !b.isCompleted &&
+              b.status !== 'Checked Out')
+        );
+
+    const freeCount = Math.max(0, Math.floor(Number(input.complimentaryQty) || 0));
+    const hasExplicitTotal = input.totalBottles !== undefined && input.totalBottles !== null;
+    const totalBottles = hasExplicitTotal
+      ? Math.max(0, Math.floor(Number(input.totalBottles) || 0))
+      : freeCount + Math.max(0, Math.floor(Number(input.chargeableQty) || 0));
+    // Total Bottles − Free Complimentary Bottles = Chargeable Bottles × Rate
+    const chargeableCount = hasExplicitTotal
+      ? Math.max(0, totalBottles - freeCount)
+      : Math.max(0, Math.floor(Number(input.chargeableQty) || 0));
+    const rate =
+      input.ratePerBottle !== undefined && Number(input.ratePerBottle) >= 0
+        ? Number(input.ratePerBottle)
+        : settings.waterBottleRate || 20;
+    const totalCharge = r2(chargeableCount * rate);
+
     const wb: WaterBottleLog = {
       id: `WB-${Date.now().toString().slice(-6)}`,
       hotelId: session.hotelId,
-      roomNumber: input.roomNumber.trim(),
-      complimentaryQty: Number(input.complimentaryQty) || 0,
-      chargeableQty: Number(input.chargeableQty) || 0,
-      amount: (Number(input.chargeableQty) || 0) * 20,
+      recordType: 'water',
+      bookingId: activeBkg?.id || activeChk?.bookingId || undefined,
+      checkInId: activeChk?.id || undefined,
+      roomNumber: rmTrim,
+      guestName:
+        input.guestName?.trim() || activeChk?.guestName || activeBkg?.guestName || 'Guest',
+      quantity: chargeableCount,
+      totalBottles,
+      complimentaryQty: freeCount,
+      complimentaryCount: freeCount,
+      chargeableQty: chargeableCount,
+      extraChargeableCount: chargeableCount,
+      unitPrice: rate,
+      ratePerBottle: rate,
+      totalAmount: totalCharge,
+      chargeAmount: totalCharge,
+      totalCharge,
+      amount: totalCharge,
+      isChargeable: chargeableCount > 0,
       date: todayStr,
+      dateTime: nowIso,
+      createdAt: nowIso,
+      suppliedBy: session.username,
+      loggedBy: session.username,
+      staffName: session.username,
+      notes: input.notes?.trim() || '',
     };
     const next = [wb, ...state.waterBottles];
     setState((prev) => ({ ...prev, waterBottles: next }));
