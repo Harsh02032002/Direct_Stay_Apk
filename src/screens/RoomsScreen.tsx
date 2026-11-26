@@ -188,7 +188,7 @@ export const RoomsScreen: React.FC = () => {
                 >
                   <View style={styles.roomHeader}>
                     <View style={styles.roomNumBadge}>
-                      <BedDouble size={13} color={COLORS.goldBright} />
+                      <BedDouble size={13} color={COLORS.goldDark} />
                       <Text style={styles.roomNumText}>{rm.number}</Text>
                     </View>
                     <View style={[styles.statusTag, { backgroundColor: palette.bg }]}>
@@ -255,15 +255,15 @@ export const RoomsScreen: React.FC = () => {
                         style={[
                           styles.choiceChip,
                           editStatus === st && {
-                            backgroundColor: COLORS.espresso,
-                            borderColor: COLORS.gold,
+                            backgroundColor: COLORS.gold,
+                            borderColor: COLORS.goldDark,
                           },
                         ]}
                       >
                         <Text
                           style={[
                             styles.choiceChipText,
-                            editStatus === st && { color: COLORS.goldBright },
+                            editStatus === st && { color: COLORS.espresso },
                           ]}
                         >
                           {st}
@@ -636,9 +636,9 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: '#F1F5F9',
   },
-  filterChipActive: { backgroundColor: COLORS.espresso },
+  filterChipActive: { backgroundColor: COLORS.gold, borderWidth: 1, borderColor: COLORS.goldDark },
   filterText: { fontSize: 11.5, fontWeight: '700', color: COLORS.textSecondary },
-  filterTextActive: { color: COLORS.goldBright, fontWeight: '800' },
+  filterTextActive: { color: COLORS.espresso, fontWeight: '800' },
   addRoomBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -674,12 +674,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: COLORS.espresso,
+    backgroundColor: '#FAF0D7',
+    borderWidth: 1,
+    borderColor: '#E5CE9A',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 8,
   },
-  roomNumText: { color: COLORS.goldBright, fontWeight: '800', fontSize: 12 },
+  roomNumText: { color: COLORS.espresso, fontWeight: '800', fontSize: 12 },
   statusTag: { paddingHorizontal: 6, paddingVertical: 3, borderRadius: 6, flexShrink: 1 },
   statusTagText: { fontSize: 9.5, fontWeight: '800' },
   catText: { fontSize: 12.5, fontWeight: '700', color: COLORS.textPrimary },
@@ -743,9 +745,11 @@ const styles = StyleSheet.create({
     flex: 1.4,
     height: 44,
     borderRadius: 11,
-    backgroundColor: COLORS.espresso,
+    backgroundColor: COLORS.gold,
+    borderWidth: 1,
+    borderColor: COLORS.goldDark,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  saveBtnText: { fontWeight: '800', color: COLORS.goldBright },
+  saveBtnText: { fontWeight: '800', color: COLORS.espresso },
 });

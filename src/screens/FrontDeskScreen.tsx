@@ -49,7 +49,7 @@ import {
 import { renderGrcHtml, renderInvoiceHtml } from '../utils/printTemplates';
 import { mobilePrint } from '../utils/mobilePrint';
 
-type FrontSubMode =
+export type FrontSubMode =
   | 'advance'
   | 'reservations'
   | 'checkin'
@@ -58,7 +58,15 @@ type FrontSubMode =
   | 'services'
   | 'cform';
 
-export const FrontDeskScreen: React.FC = () => {
+interface FrontDeskScreenProps {
+  initialSubMode?: FrontSubMode;
+  initialNavTick?: number;
+}
+
+export const FrontDeskScreen: React.FC<FrontDeskScreenProps> = ({
+  initialSubMode,
+  initialNavTick,
+}) => {
   const {
     state,
     hotelProfile,
@@ -68,7 +76,13 @@ export const FrontDeskScreen: React.FC = () => {
     addWaterBottleLog,
     addExtraServiceCatalogItem,
   } = usePms();
-  const [subMode, setSubMode] = useState<FrontSubMode>('advance');
+  const [subMode, setSubMode] = useState<FrontSubMode>(initialSubMode || 'checkin');
+
+  useEffect(() => {
+    if (initialSubMode) {
+      setSubMode(initialSubMode);
+    }
+  }, [initialSubMode, initialNavTick]);
   const [dateFilter, setDateFilter] = useState<QuickDateFilter>('all');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
@@ -113,16 +127,50 @@ export const FrontDeskScreen: React.FC = () => {
   const [checkInDate, setCheckInDate] = useState(todayStr);
   const [checkOutDate, setCheckOutDate] = useState(tomorrowStr);
   const [adults, setAdults] = useState('2');
+  const [children, setChildren] = useState('0');
+  const [bookingSource, setBookingSource] = useState('Direct');
   const [ratePerNight, setRatePerNight] = useState(String(firstRoom?.rate || 2000));
+  const [gstMode, setGstMode] = useState<'non_gst' | 'gst_extra' | 'including_gst'>(() => {
+    if (hotelProfile?.isGstEnabled === false) return 'non_gst';
+    return billSettings.roomRateIncludesGst ? 'including_gst' : 'gst_extra';
+  });
+  const withGst = gstMode !== 'non_gst';
+  const setWithGst = (next: boolean | ((prev: boolean) => boolean)) => {
+    setGstMode((prev) => {
+      const target = typeof next === 'function' ? next(prev !== 'non_gst') : next;
+      if (!target) return 'non_gst';
+      return billSettings.roomRateIncludesGst ? 'including_gst' : 'gst_extra';
+    });
+  };
+  const [discountEnabled, setDiscountEnabled] = useState(false);
+  const [discountType, setDiscountType] = useState<'fixed' | 'percent'>('fixed');
   const [discount, setDiscount] = useState('0');
-  const [withGst, setWithGst] = useState<boolean>(true);
   const [advanceAmt, setAdvanceAmt] = useState('0');
-  const [arrivalTimeInput, setArrivalTimeInput] = useState('12:00 PM');
-  const [departureTimeInput, setDepartureTimeInput] = useState('11:00 AM');
+  const [arrivalClock, setArrivalClock] = useState('12:00');
+  const [arrivalMeridiem, setArrivalMeridiem] = useState<'AM' | 'PM'>('PM');
+  const [departureClock, setDepartureClock] = useState('11:00');
+  const [departureMeridiem, setDepartureMeridiem] = useState<'AM' | 'PM'>('AM');
+  const arrivalTimeInput = `${arrivalClock.trim() || '12:00'} ${arrivalMeridiem}`;
+  const departureTimeInput = `${departureClock.trim() || '11:00'} ${departureMeridiem}`;
+
+  // Independently toggleable Check-In / Booking add-ons (strictly OFF by default)
   const [earlyCheckInApplied, setEarlyCheckInApplied] = useState(false);
   const [earlyCheckInAmt, setEarlyCheckInAmt] = useState(
     String(hotelProfile?.earlyCheckInFixedRate || hotelProfile?.earlyCheckInFee || 500)
   );
+  const [lateCheckOutApplied, setLateCheckOutApplied] = useState(false);
+  const [lateCheckOutAmt, setLateCheckOutAmt] = useState(
+    String(hotelProfile?.lateCheckOutFee || 500)
+  );
+  const [extraBedApplied, setExtraBedApplied] = useState(false);
+  const [extraBedQty, setExtraBedQty] = useState('1');
+  const [extraBedRate, setExtraBedRate] = useState('500');
+  const [checkInWaterApplied, setCheckInWaterApplied] = useState(false);
+  const [checkInWaterFree, setCheckInWaterFree] = useState('2');
+  const [checkInWaterPaid, setCheckInWaterPaid] = useState('0');
+  const [customAddonLabel, setCustomAddonLabel] = useState('');
+  const [customAddonAmt, setCustomAddonAmt] = useState('');
+
   const [paymentMethod, setPaymentMethod] = useState('UPI');
   const [selectedServiceIds, setSelectedServiceIds] = useState<string[]>([]);
   const [newSrvName, setNewSrvName] = useState('');
@@ -180,9 +228,19 @@ export const FrontDeskScreen: React.FC = () => {
   })();
 
   const activeRoomsForCalc =
-    subMode === 'advance' && bulkMode && selectedBulkRooms.length > 0
-      ? selectedBulkRooms
-      : [roomNumber];
+    bulkMode && selectedBulkRooms.length > 0 ? selectedBulkRooms : [roomNumber];
+
+  const earlyChargeVal = earlyCheckInApplied ? Math.max(0, Number(earlyCheckInAmt) || 0) : 0;
+  const lateChargeVal = lateCheckOutApplied ? Math.max(0, Number(lateCheckOutAmt) || 0) : 0;
+  const extraBedChargeVal = extraBedApplied
+    ? Math.max(0, Number(extraBedQty) || 1) * Math.max(0, Number(extraBedRate) || 0) * nights
+    : 0;
+  const waterBottleRateVal = Math.max(0, Number(billSettings.waterBottleRate) || 20);
+  const checkInWaterChargeVal = checkInWaterApplied
+    ? Math.max(0, Number(checkInWaterPaid) || 0) * waterBottleRateVal
+    : 0;
+  const customAddonVal =
+    customAddonLabel.trim() && Number(customAddonAmt) > 0 ? Math.max(0, Number(customAddonAmt) || 0) : 0;
 
   const formPreviewCharges: BillCharge[] = [
     ...activeRoomsForCalc.map((rmNo, i) => {
@@ -201,6 +259,18 @@ export const FrontDeskScreen: React.FC = () => {
         roomNumber: rmNo,
       };
     }),
+    ...(earlyChargeVal > 0
+      ? [{ id: 'early-ci', kind: 'early_checkin' as const, description: 'Early Check-In Charge', amount: earlyChargeVal, roomNumber: activeRoomsForCalc[0] || roomNumber }]
+      : []),
+    ...(lateChargeVal > 0
+      ? [{ id: 'late-co', kind: 'late_checkout' as const, description: 'Late Check-Out Charge', amount: lateChargeVal, roomNumber: activeRoomsForCalc[0] || roomNumber }]
+      : []),
+    ...(extraBedChargeVal > 0
+      ? [{ id: 'extra-bed', kind: 'extra_bed' as const, description: `Extra Bed (${extraBedQty} × ${nights}N)`, amount: extraBedChargeVal, roomNumber: activeRoomsForCalc[0] || roomNumber }]
+      : []),
+    ...(checkInWaterChargeVal > 0
+      ? [{ id: 'ci-water', kind: 'water' as const, description: `Water Bottles (${checkInWaterPaid} × ₹${waterBottleRateVal})`, amount: checkInWaterChargeVal, roomNumber: activeRoomsForCalc[0] || roomNumber }]
+      : []),
     ...tickedServices.map((srv, i) => ({
       id: `srv-${i}`,
       kind: 'service' as const,
@@ -208,7 +278,23 @@ export const FrontDeskScreen: React.FC = () => {
       amount: servicePriceOf(srv),
       roomNumber: activeRoomsForCalc[0] || roomNumber,
     })),
+    ...(customAddonVal > 0
+      ? [{ id: 'custom-addon', kind: 'service' as const, description: customAddonLabel.trim(), amount: customAddonVal, roomNumber: activeRoomsForCalc[0] || roomNumber }]
+      : []),
   ];
+
+  const grossBeforeDiscount = formPreviewCharges.reduce((s, c) => s + Number(c.amount || 0), 0);
+  const resolvedDiscountAmt =
+    discountEnabled && Number(discount) > 0
+      ? discountType === 'percent'
+        ? r2((grossBeforeDiscount * Math.min(100, Number(discount))) / 100)
+        : r2(Number(discount))
+      : 0;
+
+  const effectivePreviewSettings = {
+    ...billSettings,
+    roomRateIncludesGst: gstMode === 'including_gst',
+  };
 
   const formBillPreview = calculateBill({
     charges: formPreviewCharges,
@@ -216,9 +302,9 @@ export const FrontDeskScreen: React.FC = () => {
       Number(advanceAmt) > 0
         ? [{ id: 'adv', amount: Number(advanceAmt), method: paymentMethod }]
         : [],
-    discount: Number(discount) || 0,
+    discount: resolvedDiscountAmt,
     gstEnabled: withGst,
-    settings: billSettings,
+    settings: effectivePreviewSettings,
   });
 
   const roomSub = formBillPreview.legacy.roomCharges;
@@ -339,24 +425,63 @@ export const FrontDeskScreen: React.FC = () => {
     setGuestName(b.guestName || b.customerName || '');
     setMobile(b.mobile || '');
     setEmail(b.email || '');
-    setAadhaar(b.aadhaarNumber || '');
+    setIdType(b.idType || 'Aadhaar Card');
+    setAadhaar(b.aadhaarNumber || b.idNumber || '');
     setAddress(b.address || '');
     setCompanyName(b.companyName || '');
     setGstNumber(b.gstNumber || '');
     setRoomNumber(b.roomNumber || firstRoom?.number || '101');
+    if (Array.isArray(b.roomNumbers) && b.roomNumbers.length > 1) {
+      setBulkMode(true);
+      setSelectedBulkRooms(b.roomNumbers);
+    } else {
+      setBulkMode(false);
+    }
     setCheckInDate(b.checkInDate || todayStr);
     setCheckOutDate(b.checkOutDate || tomorrowStr);
+    const parseClock12 = (raw?: string, fallbackClock = '12:00', fallbackMer: 'AM' | 'PM' = 'PM') => {
+      const m = String(raw || '').trim().match(/^(\d{1,2}:\d{2})\s*(AM|PM)?$/i);
+      if (!m) return { clock: fallbackClock, mer: fallbackMer };
+      return {
+        clock: m[1],
+        mer: (m[2]?.toUpperCase() === 'AM' ? 'AM' : m[2]?.toUpperCase() === 'PM' ? 'PM' : fallbackMer) as 'AM' | 'PM',
+      };
+    };
+    if (b.arrivalTime || b.checkInTime) {
+      const parsed = parseClock12(b.arrivalTime || b.checkInTime, '12:00', 'PM');
+      setArrivalClock(parsed.clock);
+      setArrivalMeridiem(parsed.mer);
+    }
+    if (b.departureTime || b.checkOutTime) {
+      const parsed = parseClock12(b.departureTime || b.checkOutTime, '11:00', 'AM');
+      setDepartureClock(parsed.clock);
+      setDepartureMeridiem(parsed.mer);
+    }
     setAdults(String(b.adults || 2));
+    setChildren(String(b.children || 0));
+    setBookingSource(b.bookingSource || (b as any).source || 'Direct');
     const perNight =
       Number(b.roomSubtotal || b.bookingAmount || 0) / Math.max(1, Number(b.nights) || 1);
     setRatePerNight(String(Math.round(perNight) || 2000));
-    setDiscount(String(b.discountAmount || 0));
+    const savedDisc = Number(b.discountAmount || 0);
+    setDiscountEnabled(savedDisc > 0);
+    setDiscountType('fixed');
+    setDiscount(String(savedDisc));
+
+    const earlyVal = Number(b.earlyCheckInCharge || 0);
+    setEarlyCheckInApplied(earlyVal > 0);
+    if (earlyVal > 0) setEarlyCheckInAmt(String(earlyVal));
+    const lateVal = Number((b as any).lateCheckOutCharge || 0);
+    setLateCheckOutApplied(lateVal > 0);
+    if (lateVal > 0) setLateCheckOutAmt(String(lateVal));
+    const ebVal = Number((b as any).extraBedCharge || 0);
+    setExtraBedApplied(ebVal > 0);
 
     const savedNoGst =
       b.isWithoutGst === true ||
       b.gstInvoice === false ||
       (b.gstRate !== undefined && Number(b.gstRate) <= 0);
-    setWithGst(!savedNoGst);
+    setGstMode(savedNoGst ? 'non_gst' : billSettings.roomRateIncludesGst ? 'including_gst' : 'gst_extra');
     setAdvanceAmt(String(b.advanceAmount ?? b.amountPaid ?? 0));
     setPaymentMethod(b.paymentMethod || 'UPI');
     setSelectedServiceIds((b.bookedServices || []).map((s) => String(s.serviceId)));
@@ -374,8 +499,18 @@ export const FrontDeskScreen: React.FC = () => {
     setGoingTo('');
     setCompanyName('');
     setGstNumber('');
+    setChildren('0');
     setAdvanceAmt('0');
+    setDiscountEnabled(false);
     setDiscount('0');
+    setEarlyCheckInApplied(false);
+    setLateCheckOutApplied(false);
+    setExtraBedApplied(false);
+    setCheckInWaterApplied(false);
+    setCheckInWaterFree('2');
+    setCheckInWaterPaid('0');
+    setCustomAddonLabel('');
+    setCustomAddonAmt('');
     setSelectedServiceIds([]);
     setIsCFormRequired(false);
     setPassportNo('');
@@ -388,6 +523,12 @@ export const FrontDeskScreen: React.FC = () => {
       return;
     }
     const targetRooms = bulkMode && selectedBulkRooms.length > 0 ? selectedBulkRooms : [roomNumber];
+    const allServices: BookedServiceSelection[] = [
+      ...bookedServicesPayload,
+      ...(customAddonVal > 0
+        ? [{ serviceId: `custom-${Date.now()}`, serviceName: customAddonLabel.trim(), amount: customAddonVal }]
+        : []),
+    ];
     setSubmitting(true);
     const res = await createAdvanceBooking({
       guestName,
@@ -403,12 +544,12 @@ export const FrontDeskScreen: React.FC = () => {
       checkOutDate,
       adults: Number(adults) || 2,
       ratePerNight: Number(ratePerNight) || 2000,
-      discount: Number(discount) || 0,
+      discount: resolvedDiscountAmt,
       withGst,
       advanceAmount: Number(advanceAmt) || 0,
       paymentMethod,
-      bookingSource: 'Direct',
-      bookedServices: bookedServicesPayload,
+      bookingSource: bookingSource || 'Direct',
+      bookedServices: allServices,
     });
     setSubmitting(false);
     if (!res.ok) {
@@ -418,7 +559,11 @@ export const FrontDeskScreen: React.FC = () => {
     Alert.alert(
       'Advance Booking Saved',
       `${guestName} booked in Room(s) ${targetRooms.join(', ')} (${
-        withGst ? `GST ${defaultGst}%` : 'Without GST'
+        gstMode === 'non_gst'
+          ? 'Without GST 0%'
+          : gstMode === 'including_gst'
+          ? `Incl. GST ${defaultGst}%`
+          : `GST Extra ${defaultGst}%`
       }).`
     );
     resetForm();
@@ -429,10 +574,17 @@ export const FrontDeskScreen: React.FC = () => {
       Alert.alert('Validation', 'Guest name and 10-digit mobile number are required.');
       return;
     }
+    const targetRooms = bulkMode && selectedBulkRooms.length > 0 ? selectedBulkRooms : [roomNumber];
     const nowTimeStr = new Date().toLocaleTimeString('en-IN', {
       hour: '2-digit',
       minute: '2-digit',
     });
+    const allServices: BookedServiceSelection[] = [
+      ...bookedServicesPayload,
+      ...(customAddonVal > 0
+        ? [{ serviceId: `custom-${Date.now()}`, serviceName: customAddonLabel.trim(), amount: customAddonVal }]
+        : []),
+    ];
     setSubmitting(true);
     const res = await performCheckIn({
       linkedBookingId: linkedBookingId || undefined,
@@ -449,19 +601,23 @@ export const FrontDeskScreen: React.FC = () => {
       mealPlan,
       companyName,
       gstNumber,
-      roomNumber,
+      roomNumber: targetRooms[0],
+      roomNumbers: targetRooms,
       checkInDate,
       arrivalTime: arrivalTimeInput.trim() || nowTimeStr,
       checkOutDate,
       departureTime: departureTimeInput.trim() || '11:00 AM',
-      earlyCheckInCharge: earlyCheckInApplied ? Math.max(0, Number(earlyCheckInAmt) || 0) : 0,
+      earlyCheckInCharge: earlyChargeVal,
+      lateCheckOutCharge: lateChargeVal,
+      extraBedCharge: extraBedChargeVal,
       adults: Number(adults) || 2,
+      children: Number(children) || 0,
       ratePerNight: Number(ratePerNight) || 2000,
-      discount: Number(discount) || 0,
+      discount: resolvedDiscountAmt,
       withGst,
       advanceAmount: Number(advanceAmt) || 0,
       paymentMethod,
-      bookedServices: bookedServicesPayload,
+      bookedServices: allServices,
       isCFormRequired,
       cFormData: isCFormRequired
         ? {
@@ -472,6 +628,23 @@ export const FrontDeskScreen: React.FC = () => {
           }
         : undefined,
     });
+    if (res.ok && checkInWaterApplied) {
+      const freeQty = Math.max(0, Number(checkInWaterFree) || 0);
+      const paidQty = Math.max(0, Number(checkInWaterPaid) || 0);
+      if (freeQty + paidQty > 0) {
+        await addWaterBottleLog({
+          roomNumber: targetRooms[0],
+          totalBottles: freeQty + paidQty,
+          complimentaryQty: freeQty,
+          chargeableQty: paidQty,
+          ratePerBottle: waterBottleRateVal,
+          bookingId: linkedBookingId || res.checkInId,
+          checkInId: res.checkInId,
+          guestName,
+          notes: 'Issued at Check-In',
+        });
+      }
+    }
     setSubmitting(false);
     if (!res.ok) {
       Alert.alert('Check-In Error', res.error || 'Failed to check in guest');
@@ -681,216 +854,258 @@ export const FrontDeskScreen: React.FC = () => {
               </View>
             )}
 
-            {/* Single Clean ☑ GST Invoice Checkbox (Rate comes strictly from Profile & Settings) */}
-            {subMode === 'checkin' && isCheckInLockedByInv ? (
-              <View style={styles.lockedBanner}>
-                <Lock size={14} color={COLORS.amber} />
-                <Text style={styles.lockedText}>
-                  Invoice already generated — GST mode locked (
-                  {withGst ? `GST ${defaultGst}%` : 'Without GST'}).
-                </Text>
-              </View>
-            ) : (
-              <TouchableOpacity
-                activeOpacity={0.82}
-                onPress={() => setWithGst((p) => !p)}
-                style={[
-                  styles.gstSingleCheck,
-                  withGst && {
-                    borderColor: COLORS.emerald,
-                    backgroundColor: COLORS.emeraldSoft,
-                  },
-                ]}
-              >
-                {withGst ? (
-                  <CheckSquare size={20} color={COLORS.emerald} />
-                ) : (
-                  <Square size={20} color={COLORS.textSecondary} />
-                )}
+            {/* ============ STEP 1: GUEST & IDENTITY DETAILS ============ */}
+            <View style={{ borderTopWidth: 1, borderTopColor: COLORS.border, paddingTop: 10, marginTop: 4, marginBottom: 8 }}>
+              <Text style={{ fontSize: 11, fontWeight: '800', color: COLORS.goldDark, letterSpacing: 0.7, marginBottom: 8 }}>
+                1. GUEST &amp; IDENTITY DETAILS
+              </Text>
+
+              <Text style={styles.inputLabel}>Guest Full Name *</Text>
+              <TextInput
+                value={guestName}
+                onChangeText={setGuestName}
+                placeholder="e.g. Rajesh Sharma"
+                placeholderTextColor={COLORS.textMuted}
+                style={styles.input}
+              />
+
+              <View style={styles.twoCol}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.gstSingleTitle}>
-                    GST Invoice (
-                    {withGst ? `${defaultGst}% Room GST Applied` : 'Unchecked — 0% Without GST'})
-                  </Text>
-                  <Text style={styles.gstSingleSub}>
-                    Single GST Invoice tick. Configure GST % in Profile & Settings.
-                  </Text>
+                  <Text style={styles.inputLabel}>Mobile (10-digit) *</Text>
+                  <TextInput
+                    value={mobile}
+                    onChangeText={setMobile}
+                    keyboardType="phone-pad"
+                    maxLength={10}
+                    placeholder="9876543210"
+                    placeholderTextColor={COLORS.textMuted}
+                    style={styles.input}
+                  />
                 </View>
-              </TouchableOpacity>
-            )}
-
-            {/* Guest Fields */}
-            <Text style={styles.inputLabel}>Guest Full Name *</Text>
-            <TextInput
-              value={guestName}
-              onChangeText={setGuestName}
-              placeholder="e.g. Rajesh Sharma"
-              placeholderTextColor={COLORS.textMuted}
-              style={styles.input}
-            />
-
-            <View style={styles.twoCol}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.inputLabel}>Mobile (10-digit) *</Text>
-                <TextInput
-                  value={mobile}
-                  onChangeText={setMobile}
-                  keyboardType="phone-pad"
-                  maxLength={10}
-                  placeholder="9876543210"
-                  placeholderTextColor={COLORS.textMuted}
-                  style={styles.input}
-                />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.inputLabel}>Email (For Invoice / Confirmation)</Text>
+                  <TextInput
+                    value={email}
+                    onChangeText={setEmail}
+                    keyboardType="email-address"
+                    autoCapitalize="none"
+                    placeholder="guest@email.com"
+                    placeholderTextColor={COLORS.textMuted}
+                    style={styles.input}
+                  />
+                </View>
               </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.inputLabel}>ID / Aadhaar No.</Text>
-                <TextInput
-                  value={aadhaar}
-                  onChangeText={setAadhaar}
-                  placeholder="ID Number"
-                  placeholderTextColor={COLORS.textMuted}
-                  style={styles.input}
-                />
+
+              <Text style={styles.inputLabel}>ID Proof Type</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 8 }}>
+                <View style={{ flexDirection: 'row', gap: 6 }}>
+                  {['Aadhaar Card', 'Passport', 'Driving License', 'PAN Card', 'Voter ID'].map((t) => {
+                    const active = idType === t;
+                    return (
+                      <TouchableOpacity
+                        key={t}
+                        onPress={() => setIdType(t)}
+                        style={[
+                          styles.bulkToggleBtn,
+                          active && { backgroundColor: COLORS.gold, borderColor: COLORS.goldDark },
+                        ]}
+                      >
+                        <Text style={[styles.bulkToggleText, active && { color: COLORS.espresso, fontWeight: '800' }]}>
+                          {t}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </ScrollView>
+
+              <View style={styles.twoCol}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.inputLabel}>{idType} Number</Text>
+                  <TextInput
+                    value={aadhaar}
+                    onChangeText={setAadhaar}
+                    placeholder="ID Number"
+                    placeholderTextColor={COLORS.textMuted}
+                    style={styles.input}
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.inputLabel}>Address / City</Text>
+                  <TextInput
+                    value={address}
+                    onChangeText={setAddress}
+                    placeholder="Residential address"
+                    placeholderTextColor={COLORS.textMuted}
+                    style={styles.input}
+                  />
+                </View>
               </View>
+
+              {subMode === 'checkin' && (
+                <>
+                  <View style={styles.twoCol}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.inputLabel}>Coming From</Text>
+                      <TextInput
+                        value={comingFrom}
+                        onChangeText={setComingFrom}
+                        placeholder="Origin City"
+                        placeholderTextColor={COLORS.textMuted}
+                        style={styles.input}
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.inputLabel}>Going To</Text>
+                      <TextInput
+                        value={goingTo}
+                        onChangeText={setGoingTo}
+                        placeholder="Next Destination"
+                        placeholderTextColor={COLORS.textMuted}
+                        style={styles.input}
+                      />
+                    </View>
+                  </View>
+
+                  <View style={styles.twoCol}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.inputLabel}>Nationality</Text>
+                      <TextInput
+                        value={nationality}
+                        onChangeText={(val) => {
+                          setNationality(val);
+                          if (
+                            val.trim() &&
+                            val.trim().toLowerCase() !== 'indian' &&
+                            val.trim().toLowerCase() !== 'india'
+                          ) {
+                            setIsCFormRequired(true);
+                          }
+                        }}
+                        placeholder="Indian"
+                        placeholderTextColor={COLORS.textMuted}
+                        style={styles.input}
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.inputLabel}>Meal Plan</Text>
+                      <View style={{ flexDirection: 'row', gap: 4, marginBottom: 8 }}>
+                        {['EP', 'CP', 'MAP', 'AP'].map((mp) => (
+                          <TouchableOpacity
+                            key={mp}
+                            onPress={() => setMealPlan(mp)}
+                            style={[
+                              styles.bulkToggleBtn,
+                              { flex: 1, alignItems: 'center', paddingVertical: 8 },
+                              mealPlan === mp && { backgroundColor: COLORS.gold, borderColor: COLORS.goldDark },
+                            ]}
+                          >
+                            <Text style={[styles.bulkToggleText, mealPlan === mp && { color: COLORS.espresso, fontWeight: '800' }]}>
+                              {mp}
+                            </Text>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                    </View>
+                  </View>
+
+                  <Text style={styles.inputLabel}>Purpose of Visit</Text>
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+                    {['Leisure', 'Business', 'Family', 'Event / Banquet', 'Medical'].map((purp) => {
+                      const active = purposeOfVisit === purp;
+                      return (
+                        <TouchableOpacity
+                          key={purp}
+                          onPress={() => setPurposeOfVisit(purp)}
+                          style={[
+                            styles.bulkToggleBtn,
+                            active && { backgroundColor: COLORS.gold, borderColor: COLORS.goldDark },
+                          ]}
+                        >
+                          <Text style={[styles.bulkToggleText, active && { color: COLORS.espresso, fontWeight: '800' }]}>
+                            {purp}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+
+                  <TouchableOpacity
+                    onPress={() => setIsCFormRequired((p) => !p)}
+                    style={styles.cformToggle}
+                  >
+                    {isCFormRequired ? (
+                      <CheckSquare size={17} color={COLORS.blue} />
+                    ) : (
+                      <Square size={17} color={COLORS.textSecondary} />
+                    )}
+                    <Text style={styles.cformToggleText}>
+                      Foreign National Guest (Enable Police Form-C Details)
+                    </Text>
+                  </TouchableOpacity>
+
+                  {isCFormRequired && (
+                    <View style={styles.cformBox}>
+                      <View style={styles.twoCol}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.inputLabel}>Passport No. *</Text>
+                          <TextInput
+                            value={passportNo}
+                            onChangeText={setPassportNo}
+                            autoCapitalize="characters"
+                            placeholder="Passport No"
+                            style={styles.input}
+                          />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.inputLabel}>Visa No. *</Text>
+                          <TextInput
+                            value={visaNo}
+                            onChangeText={setVisaNo}
+                            autoCapitalize="characters"
+                            placeholder="Visa No"
+                            style={styles.input}
+                          />
+                        </View>
+                      </View>
+                      <View style={styles.twoCol}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.inputLabel}>Passport Country</Text>
+                          <TextInput
+                            value={passportCountry}
+                            onChangeText={setPassportCountry}
+                            placeholder="USA / UK / etc."
+                            style={styles.input}
+                          />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.inputLabel}>Port of Arrival</Text>
+                          <TextInput
+                            value={portOfArrival}
+                            onChangeText={setPortOfArrival}
+                            placeholder="Airport"
+                            style={styles.input}
+                          />
+                        </View>
+                      </View>
+                    </View>
+                  )}
+                </>
+              )}
             </View>
 
-            <Text style={styles.inputLabel}>Address / City</Text>
-            <TextInput
-              value={address}
-              onChangeText={setAddress}
-              placeholder="Guest residential address"
-              placeholderTextColor={COLORS.textMuted}
-              style={styles.input}
-            />
-
-            {subMode === 'checkin' && (
-              <>
-                <View style={styles.twoCol}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.inputLabel}>Coming From</Text>
-                    <TextInput
-                      value={comingFrom}
-                      onChangeText={setComingFrom}
-                      placeholder="City"
-                      placeholderTextColor={COLORS.textMuted}
-                      style={styles.input}
-                    />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.inputLabel}>Going To</Text>
-                    <TextInput
-                      value={goingTo}
-                      onChangeText={setGoingTo}
-                      placeholder="Next City"
-                      placeholderTextColor={COLORS.textMuted}
-                      style={styles.input}
-                    />
-                  </View>
-                </View>
-
-                <View style={styles.twoCol}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.inputLabel}>Nationality</Text>
-                    <TextInput
-                      value={nationality}
-                      onChangeText={(val) => {
-                        setNationality(val);
-                        if (
-                          val.trim() &&
-                          val.trim().toLowerCase() !== 'indian' &&
-                          val.trim().toLowerCase() !== 'india'
-                        ) {
-                          setIsCFormRequired(true);
-                        }
-                      }}
-                      placeholder="Indian"
-                      placeholderTextColor={COLORS.textMuted}
-                      style={styles.input}
-                    />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.inputLabel}>Meal Plan</Text>
-                    <TextInput
-                      value={mealPlan}
-                      onChangeText={setMealPlan}
-                      placeholder="EP / CP / MAP"
-                      placeholderTextColor={COLORS.textMuted}
-                      style={styles.input}
-                    />
-                  </View>
-                </View>
-
-                <TouchableOpacity
-                  onPress={() => setIsCFormRequired((p) => !p)}
-                  style={styles.cformToggle}
-                >
-                  {isCFormRequired ? (
-                    <CheckSquare size={17} color={COLORS.blue} />
-                  ) : (
-                    <Square size={17} color={COLORS.textSecondary} />
-                  )}
-                  <Text style={styles.cformToggleText}>
-                    Foreign National Guest (Enable Police Form-C Details)
-                  </Text>
-                </TouchableOpacity>
-
-                {isCFormRequired && (
-                  <View style={styles.cformBox}>
-                    <View style={styles.twoCol}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.inputLabel}>Passport No. *</Text>
-                        <TextInput
-                          value={passportNo}
-                          onChangeText={setPassportNo}
-                          autoCapitalize="characters"
-                          placeholder="Passport No"
-                          style={styles.input}
-                        />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.inputLabel}>Visa No. *</Text>
-                        <TextInput
-                          value={visaNo}
-                          onChangeText={setVisaNo}
-                          autoCapitalize="characters"
-                          placeholder="Visa No"
-                          style={styles.input}
-                        />
-                      </View>
-                    </View>
-                    <View style={styles.twoCol}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.inputLabel}>Passport Country</Text>
-                        <TextInput
-                          value={passportCountry}
-                          onChangeText={setPassportCountry}
-                          placeholder="USA / UK / etc."
-                          style={styles.input}
-                        />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.inputLabel}>Port of Arrival</Text>
-                        <TextInput
-                          value={portOfArrival}
-                          onChangeText={setPortOfArrival}
-                          placeholder="Airport"
-                          style={styles.input}
-                        />
-                      </View>
-                    </View>
-                  </View>
-                )}
-              </>
-            )}
-
-            {/* Room Selector */}
-            <View style={styles.roomSelectHeader}>
-              <Text style={styles.inputLabel}>
-                {subMode === 'advance' && bulkMode
-                  ? `Select Multiple Rooms (${selectedBulkRooms.length} Selected)`
-                  : 'Select Room'}
+            {/* ============ STEP 2: STAY, ROOM & 12H AM/PM TIMINGS ============ */}
+            <View style={{ borderTopWidth: 1, borderTopColor: COLORS.border, paddingTop: 10, marginBottom: 8 }}>
+              <Text style={{ fontSize: 11, fontWeight: '800', color: COLORS.goldDark, letterSpacing: 0.7, marginBottom: 8 }}>
+                2. STAY, ROOMS &amp; 12H AM/PM TIMINGS
               </Text>
-              {subMode === 'advance' && (
+
+              <View style={styles.roomSelectHeader}>
+                <Text style={styles.inputLabel}>
+                  {bulkMode
+                    ? `Select Multiple Rooms (${selectedBulkRooms.length} Selected)`
+                    : 'Select Room'}
+                </Text>
                 <TouchableOpacity
                   onPress={() => {
                     setBulkMode((prev) => !prev);
@@ -906,289 +1121,575 @@ export const FrontDeskScreen: React.FC = () => {
                       bulkMode && { color: COLORS.espresso, fontWeight: '800' },
                     ]}
                   >
-                    {bulkMode ? '✓ Bulk Multi-Room ON' : '+ Bulk Rooms (3-4 Rooms)'}
+                    {bulkMode ? '✓ Multi-Room ON' : '+ Multi-Room / Group'}
                   </Text>
                 </TouchableOpacity>
-              )}
-            </View>
+              </View>
 
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              style={{ marginBottom: 10 }}
-            >
-              <View style={{ flexDirection: 'row', gap: 8 }}>
-                {state.rooms.map((rm) => {
-                  const selected =
-                    subMode === 'advance' && bulkMode
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={{ marginBottom: 10 }}
+              >
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                  {state.rooms.map((rm) => {
+                    const selected = bulkMode
                       ? selectedBulkRooms.includes(rm.number)
                       : roomNumber === rm.number;
+                    return (
+                      <TouchableOpacity
+                        key={rm.id}
+                        onPress={() => {
+                          if (bulkMode) {
+                            toggleBulkRoom(rm.number);
+                          } else {
+                            setRoomNumber(rm.number);
+                            setRatePerNight(String(rm.rate || 2000));
+                          }
+                        }}
+                        style={[styles.roomChip, selected && styles.roomChipSelected]}
+                      >
+                        <Text style={[styles.roomChipNum, selected && { color: COLORS.espresso }]}>
+                          Rm {rm.number}
+                        </Text>
+                        <Text style={[styles.roomChipSub, selected && { color: COLORS.espresso }]}>
+                          {rm.category} • ₹{rm.rate} • {rm.status}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </ScrollView>
+
+              {/* Check-In & Check-Out Dates */}
+              <View style={styles.twoCol}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.inputLabel} numberOfLines={1}>
+                    Check-In Date *
+                  </Text>
+                  <TextInput
+                    value={checkInDate}
+                    onChangeText={setCheckInDate}
+                    placeholder="YYYY-MM-DD"
+                    style={styles.input}
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.inputLabel} numberOfLines={1}>
+                    Check-Out Date * ({nights}N)
+                  </Text>
+                  <TextInput
+                    value={checkOutDate}
+                    onChangeText={setCheckOutDate}
+                    placeholder="YYYY-MM-DD"
+                    style={styles.input}
+                  />
+                </View>
+              </View>
+
+              {/* 12h AM/PM Arrival & Departure Time Pickers */}
+              <View style={styles.twoCol}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.inputLabel}>Arrival Time (12h)</Text>
+                  <View style={{ flexDirection: 'row', gap: 4, alignItems: 'center', marginBottom: 8 }}>
+                    <TextInput
+                      value={arrivalClock}
+                      onChangeText={setArrivalClock}
+                      placeholder="12:00"
+                      style={[styles.input, { flex: 1, marginBottom: 0 }]}
+                    />
+                    {(['AM', 'PM'] as const).map((m) => (
+                      <TouchableOpacity
+                        key={m}
+                        onPress={() => setArrivalMeridiem(m)}
+                        style={[
+                          styles.bulkToggleBtn,
+                          { paddingHorizontal: 8, paddingVertical: 8 },
+                          arrivalMeridiem === m && { backgroundColor: COLORS.gold, borderColor: COLORS.goldDark },
+                        ]}
+                      >
+                        <Text style={[styles.bulkToggleText, arrivalMeridiem === m && { color: COLORS.espresso, fontWeight: '800' }]}>
+                          {m}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.inputLabel}>Departure Time (12h)</Text>
+                  <View style={{ flexDirection: 'row', gap: 4, alignItems: 'center', marginBottom: 8 }}>
+                    <TextInput
+                      value={departureClock}
+                      onChangeText={setDepartureClock}
+                      placeholder="11:00"
+                      style={[styles.input, { flex: 1, marginBottom: 0 }]}
+                    />
+                    {(['AM', 'PM'] as const).map((m) => (
+                      <TouchableOpacity
+                        key={m}
+                        onPress={() => setDepartureMeridiem(m)}
+                        style={[
+                          styles.bulkToggleBtn,
+                          { paddingHorizontal: 8, paddingVertical: 8 },
+                          departureMeridiem === m && { backgroundColor: COLORS.gold, borderColor: COLORS.goldDark },
+                        ]}
+                      >
+                        <Text style={[styles.bulkToggleText, departureMeridiem === m && { color: COLORS.espresso, fontWeight: '800' }]}>
+                          {m}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+              </View>
+
+              {/* Adults & Children Steppers + Nightly Tariff */}
+              <View style={styles.twoCol}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.inputLabel}>Adults</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                    <TouchableOpacity
+                      onPress={() => setAdults(String(Math.max(1, (Number(adults) || 1) - 1)))}
+                      style={[styles.bulkToggleBtn, { paddingHorizontal: 12, paddingVertical: 7 }]}
+                    >
+                      <Text style={{ fontWeight: '800', color: COLORS.espresso }}>−</Text>
+                    </TouchableOpacity>
+                    <Text style={{ fontSize: 15, fontWeight: '800', color: COLORS.espresso, minWidth: 24, textAlign: 'center' }}>
+                      {adults}
+                    </Text>
+                    <TouchableOpacity
+                      onPress={() => setAdults(String((Number(adults) || 1) + 1))}
+                      style={[styles.bulkToggleBtn, { paddingHorizontal: 12, paddingVertical: 7 }]}
+                    >
+                      <Text style={{ fontWeight: '800', color: COLORS.espresso }}>+</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.inputLabel}>Children</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                    <TouchableOpacity
+                      onPress={() => setChildren(String(Math.max(0, (Number(children) || 0) - 1)))}
+                      style={[styles.bulkToggleBtn, { paddingHorizontal: 12, paddingVertical: 7 }]}
+                    >
+                      <Text style={{ fontWeight: '800', color: COLORS.espresso }}>−</Text>
+                    </TouchableOpacity>
+                    <Text style={{ fontSize: 15, fontWeight: '800', color: COLORS.espresso, minWidth: 24, textAlign: 'center' }}>
+                      {children}
+                    </Text>
+                    <TouchableOpacity
+                      onPress={() => setChildren(String((Number(children) || 0) + 1))}
+                      style={[styles.bulkToggleBtn, { paddingHorizontal: 12, paddingVertical: 7 }]}
+                    >
+                      <Text style={{ fontWeight: '800', color: COLORS.espresso }}>+</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
+
+              {/* Nightly Tariff + Reset to Rack Rate */}
+              <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginBottom: 8 }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.inputLabel}>Tariff / Night (₹)</Text>
+                  <TextInput
+                    value={ratePerNight}
+                    onChangeText={setRatePerNight}
+                    keyboardType="numeric"
+                    style={[styles.input, { marginBottom: 0 }]}
+                  />
+                </View>
+                <TouchableOpacity
+                  onPress={() => {
+                    const rm = state.rooms.find((r) => r.number === roomNumber);
+                    if (rm?.rate) setRatePerNight(String(rm.rate));
+                  }}
+                  style={[styles.bulkToggleBtn, { paddingVertical: 10, paddingHorizontal: 10 }]}
+                >
+                  <Text style={styles.bulkToggleText}>Reset Rack Rate</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Booking Source Chips */}
+              <Text style={styles.inputLabel}>Booking Source</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 6 }}>
+                <View style={{ flexDirection: 'row', gap: 6 }}>
+                  {['Direct', 'Walk-In', 'Phone', 'MakeMyTrip', 'Goibibo', 'Booking.com', 'Agoda', 'Travel Agent'].map((src) => {
+                    const active = bookingSource === src;
+                    return (
+                      <TouchableOpacity
+                        key={src}
+                        onPress={() => setBookingSource(src)}
+                        style={[
+                          styles.bulkToggleBtn,
+                          active && { backgroundColor: COLORS.gold, borderColor: COLORS.goldDark },
+                        ]}
+                      >
+                        <Text style={[styles.bulkToggleText, active && { color: COLORS.espresso, fontWeight: '800' }]}>
+                          {src}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </ScrollView>
+            </View>
+
+            {/* ============ STEP 3: ADD-ONS, EXTRA BED, EARLY/LATE & WATER BOTTLES ============ */}
+            <View style={{ borderTopWidth: 1, borderTopColor: COLORS.border, paddingTop: 10, marginBottom: 8 }}>
+              <Text style={{ fontSize: 11, fontWeight: '800', color: COLORS.goldDark, letterSpacing: 0.7, marginBottom: 8 }}>
+                3. OPTIONAL ADD-ONS, EXTRA BED &amp; WATER BOTTLES (OFF BY DEFAULT)
+              </Text>
+
+              {/* Early Check-In Surcharge */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8, backgroundColor: '#FDF8EE', borderWidth: 1, borderColor: COLORS.gold, borderRadius: 12, padding: 10 }}>
+                <TouchableOpacity
+                  onPress={() => setEarlyCheckInApplied((p) => !p)}
+                  style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 }}
+                >
+                  {earlyCheckInApplied ? <CheckSquare size={18} color={COLORS.emerald} /> : <Square size={18} color={COLORS.textSecondary} />}
+                  <Text style={{ fontSize: 12, fontWeight: '700', color: COLORS.espresso }}>Early Check-In Surcharge</Text>
+                </TouchableOpacity>
+                {earlyCheckInApplied && (
+                  <TextInput
+                    value={earlyCheckInAmt}
+                    onChangeText={setEarlyCheckInAmt}
+                    keyboardType="numeric"
+                    placeholder="₹500"
+                    style={[styles.input, { width: 88, marginBottom: 0 }]}
+                  />
+                )}
+              </View>
+
+              {/* Late Check-Out Surcharge */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8, backgroundColor: '#FAF7F2', borderWidth: 1, borderColor: COLORS.border, borderRadius: 12, padding: 10 }}>
+                <TouchableOpacity
+                  onPress={() => setLateCheckOutApplied((p) => !p)}
+                  style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 }}
+                >
+                  {lateCheckOutApplied ? <CheckSquare size={18} color={COLORS.emerald} /> : <Square size={18} color={COLORS.textSecondary} />}
+                  <Text style={{ fontSize: 12, fontWeight: '700', color: COLORS.espresso }}>Late Check-Out Charge</Text>
+                </TouchableOpacity>
+                {lateCheckOutApplied && (
+                  <TextInput
+                    value={lateCheckOutAmt}
+                    onChangeText={setLateCheckOutAmt}
+                    keyboardType="numeric"
+                    placeholder="₹500"
+                    style={[styles.input, { width: 88, marginBottom: 0 }]}
+                  />
+                )}
+              </View>
+
+              {/* Extra Bed / Mattress */}
+              <View style={{ marginBottom: 8, backgroundColor: '#FAF7F2', borderWidth: 1, borderColor: COLORS.border, borderRadius: 12, padding: 10 }}>
+                <TouchableOpacity
+                  onPress={() => setExtraBedApplied((p) => !p)}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}
+                >
+                  {extraBedApplied ? <CheckSquare size={18} color={COLORS.emerald} /> : <Square size={18} color={COLORS.textSecondary} />}
+                  <Text style={{ fontSize: 12, fontWeight: '700', color: COLORS.espresso }}>
+                    Extra Bed / Mattress {extraBedApplied ? `(+₹${formatMoney(extraBedChargeVal)})` : ''}
+                  </Text>
+                </TouchableOpacity>
+                {extraBedApplied && (
+                  <View style={[styles.twoCol, { marginTop: 8 }]}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.inputLabel}>Qty</Text>
+                      <TextInput value={extraBedQty} onChangeText={setExtraBedQty} keyboardType="numeric" style={[styles.input, { marginBottom: 0 }]} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.inputLabel}>Rate / Night (₹)</Text>
+                      <TextInput value={extraBedRate} onChangeText={setExtraBedRate} keyboardType="numeric" style={[styles.input, { marginBottom: 0 }]} />
+                    </View>
+                  </View>
+                )}
+              </View>
+
+              {/* Check-In Water Bottles Section */}
+              {subMode === 'checkin' && (
+                <View style={{ marginBottom: 8, backgroundColor: '#EFF6FF', borderWidth: 1, borderColor: COLORS.blueBorder, borderRadius: 12, padding: 10 }}>
+                  <TouchableOpacity
+                    onPress={() => setCheckInWaterApplied((p) => !p)}
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}
+                  >
+                    {checkInWaterApplied ? <CheckSquare size={18} color={COLORS.blue} /> : <Square size={18} color={COLORS.textSecondary} />}
+                    <Text style={{ fontSize: 12, fontWeight: '700', color: COLORS.blue }}>
+                      Issue Water Bottles at Check-In (₹{waterBottleRateVal}/extra bottle)
+                    </Text>
+                  </TouchableOpacity>
+                  {checkInWaterApplied && (
+                    <View style={[styles.twoCol, { marginTop: 8 }]}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.inputLabel}>Complimentary (Free)</Text>
+                        <TextInput value={checkInWaterFree} onChangeText={setCheckInWaterFree} keyboardType="numeric" style={[styles.input, { marginBottom: 0 }]} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.inputLabel}>Chargeable Qty</Text>
+                        <TextInput value={checkInWaterPaid} onChangeText={setCheckInWaterPaid} keyboardType="numeric" style={[styles.input, { marginBottom: 0 }]} />
+                      </View>
+                    </View>
+                  )}
+                </View>
+              )}
+
+              {/* Available Extra Services */}
+              <View style={styles.servicesBox}>
+                <View style={styles.servicesBoxHeader}>
+                  <View style={{ flex: 1, marginRight: 8 }}>
+                    <Text style={styles.servicesBoxTitle}>
+                      ✨ AVAILABLE EXTRA SERVICES ({serviceCatalog.length})
+                    </Text>
+                    <Text style={{ fontSize: 11, color: COLORS.textSecondary, marginTop: 2 }}>
+                      Tap to add extra services to this {subMode === 'advance' ? 'Advance Booking' : 'Check-In'}
+                    </Text>
+                  </View>
+                  <TouchableOpacity onPress={() => setSubMode('services')} style={styles.manageServicesBtn}>
+                    <Text style={{ fontSize: 11, fontWeight: '800', color: '#0F766E' }}>+ Manage</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {serviceCatalog.length === 0 ? (
+                  <Text style={{ fontSize: 11, color: COLORS.textMuted, fontStyle: 'italic' }}>
+                    No extra services added yet. Tap "+ Manage" to add service categories.
+                  </Text>
+                ) : (
+                  serviceCatalog.map((srv) => {
+                    const sid = String(srv.id);
+                    const picked = selectedServiceIds.includes(sid);
+                    const price = servicePriceOf(srv);
+                    return (
+                      <TouchableOpacity
+                        key={sid}
+                        activeOpacity={0.8}
+                        onPress={() =>
+                          setSelectedServiceIds((prev) =>
+                            prev.includes(sid) ? prev.filter((x) => x !== sid) : [...prev, sid]
+                          )
+                        }
+                        style={[styles.servicePickRow, picked && styles.servicePickRowActive]}
+                      >
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+                          {picked ? <CheckSquare size={17} color={COLORS.emerald} /> : <Square size={17} color={COLORS.textMuted} />}
+                          <Text style={styles.servicePickName} numberOfLines={1}>
+                            {srv.serviceName || 'Extra Service'}
+                          </Text>
+                        </View>
+                        <Text style={{ fontSize: 12, fontWeight: '800', color: '#0F766E' }}>
+                          + ₹{price.toLocaleString('en-IN')}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })
+                )}
+
+                {/* Custom One-Off Add-On */}
+                <View style={[styles.twoCol, { marginTop: 8 }]}>
+                  <TextInput
+                    value={customAddonLabel}
+                    onChangeText={setCustomAddonLabel}
+                    placeholder="Custom Add-on (e.g. Airport Pickup)"
+                    placeholderTextColor={COLORS.textMuted}
+                    style={[styles.input, { flex: 1.5, marginBottom: 0 }]}
+                  />
+                  <TextInput
+                    value={customAddonAmt}
+                    onChangeText={setCustomAddonAmt}
+                    keyboardType="numeric"
+                    placeholder="₹ Amt"
+                    placeholderTextColor={COLORS.textMuted}
+                    style={[styles.input, { flex: 0.7, marginBottom: 0 }]}
+                  />
+                </View>
+              </View>
+            </View>
+
+            {/* ============ STEP 4: GST MODE, DISCOUNT & PAYMENT SETTLEMENT ============ */}
+            <View style={{ borderTopWidth: 1, borderTopColor: COLORS.border, paddingTop: 10, marginBottom: 8 }}>
+              <Text style={{ fontSize: 11, fontWeight: '800', color: COLORS.goldDark, letterSpacing: 0.7, marginBottom: 8 }}>
+                4. GST MODE, DISCOUNT &amp; PAYMENT
+              </Text>
+
+              {/* 3-Mode GST Selector (Matches Web /admin 1:1!) */}
+              {subMode === 'checkin' && isCheckInLockedByInv ? (
+                <View style={styles.lockedBanner}>
+                  <Lock size={14} color={COLORS.amber} />
+                  <Text style={styles.lockedText}>
+                    Invoice already generated — GST mode locked ({withGst ? `GST ${defaultGst}%` : 'Without GST 0%'}).
+                  </Text>
+                </View>
+              ) : (
+                <View style={{ flexDirection: 'row', gap: 6, marginBottom: 10 }}>
+                  {[
+                    { id: 'non_gst' as const, label: 'No GST (0%)' },
+                    { id: 'gst_extra' as const, label: `+ ${defaultGst}% Extra` },
+                    { id: 'including_gst' as const, label: `Incl. ${defaultGst}% GST` },
+                  ].map((opt) => {
+                    const active = gstMode === opt.id;
+                    return (
+                      <TouchableOpacity
+                        key={opt.id}
+                        onPress={() => setGstMode(opt.id)}
+                        style={[
+                          styles.bulkToggleBtn,
+                          { flex: 1, alignItems: 'center', paddingVertical: 9 },
+                          active && { backgroundColor: COLORS.gold, borderColor: COLORS.goldDark },
+                        ]}
+                      >
+                        <Text style={[styles.bulkToggleText, { fontSize: 11 }, active && { color: COLORS.espresso, fontWeight: '800' }]}>
+                          {opt.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              )}
+
+              {withGst && (
+                <View style={styles.twoCol}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.inputLabel} numberOfLines={1}>Company (Optional)</Text>
+                    <TextInput
+                      value={companyName}
+                      onChangeText={setCompanyName}
+                      placeholder="Corporate Name"
+                      placeholderTextColor={COLORS.textMuted}
+                      style={styles.input}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.inputLabel} numberOfLines={1}>Company GSTIN</Text>
+                    <TextInput
+                      value={gstNumber}
+                      onChangeText={setGstNumber}
+                      autoCapitalize="characters"
+                      placeholder="22AAAAA0000A1Z5"
+                      placeholderTextColor={COLORS.textMuted}
+                      style={styles.input}
+                    />
+                  </View>
+                </View>
+              )}
+
+              {/* Independent Discount Toggle (OFF / Fixed ₹ / %) */}
+              <View style={{ marginBottom: 10, backgroundColor: '#FAF7F2', borderWidth: 1, borderColor: COLORS.border, borderRadius: 12, padding: 10 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <TouchableOpacity
+                    onPress={() => setDiscountEnabled((p) => !p)}
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}
+                  >
+                    {discountEnabled ? <CheckSquare size={18} color={COLORS.emerald} /> : <Square size={18} color={COLORS.textSecondary} />}
+                    <Text style={{ fontSize: 12, fontWeight: '700', color: COLORS.espresso }}>Apply Discount</Text>
+                  </TouchableOpacity>
+                  {discountEnabled && (
+                    <View style={{ flexDirection: 'row', gap: 4 }}>
+                      {(['fixed', 'percent'] as const).map((dt) => (
+                        <TouchableOpacity
+                          key={dt}
+                          onPress={() => setDiscountType(dt)}
+                          style={[
+                            styles.bulkToggleBtn,
+                            { paddingHorizontal: 8, paddingVertical: 4 },
+                            discountType === dt && { backgroundColor: COLORS.gold, borderColor: COLORS.goldDark },
+                          ]}
+                        >
+                          <Text style={[styles.bulkToggleText, discountType === dt && { color: COLORS.espresso, fontWeight: '800' }]}>
+                            {dt === 'fixed' ? '₹ Fixed' : '% Pct'}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  )}
+                </View>
+                {discountEnabled && (
+                  <TextInput
+                    value={discount}
+                    onChangeText={setDiscount}
+                    keyboardType="numeric"
+                    placeholder={discountType === 'percent' ? 'Discount % (e.g. 10)' : 'Discount ₹ (e.g. 300)'}
+                    style={[styles.input, { marginTop: 8, marginBottom: 0 }]}
+                  />
+                )}
+              </View>
+
+              {/* Payment Mode & Advance Paid */}
+              <Text style={styles.inputLabel}>Payment Mode</Text>
+              <View style={{ flexDirection: 'row', gap: 6, marginBottom: 8 }}>
+                {['Cash', 'UPI', 'Card', 'Bank Transfer'].map((pm) => {
+                  const active = paymentMethod === pm;
                   return (
                     <TouchableOpacity
-                      key={rm.id}
-                      onPress={() => {
-                        if (subMode === 'advance' && bulkMode) {
-                          toggleBulkRoom(rm.number);
-                        } else {
-                          setRoomNumber(rm.number);
-                          setRatePerNight(String(rm.rate || 2000));
-                        }
-                      }}
-                      style={[styles.roomChip, selected && styles.roomChipSelected]}
+                      key={pm}
+                      onPress={() => setPaymentMethod(pm)}
+                      style={[
+                        styles.bulkToggleBtn,
+                        { flex: 1, alignItems: 'center', paddingVertical: 8 },
+                        active && { backgroundColor: COLORS.gold, borderColor: COLORS.goldDark },
+                      ]}
                     >
-                      <Text style={[styles.roomChipNum, selected && { color: COLORS.goldBright }]}>
-                        Rm {rm.number}
-                      </Text>
-                      <Text style={[styles.roomChipSub, selected && { color: '#FFF' }]}>
-                        ₹{rm.rate} • {rm.status}
+                      <Text style={[styles.bulkToggleText, { fontSize: 11 }, active && { color: COLORS.espresso, fontWeight: '800' }]}>
+                        {pm === 'Bank Transfer' ? 'Bank' : pm}
                       </Text>
                     </TouchableOpacity>
                   );
                 })}
               </View>
-            </ScrollView>
 
-            <View style={styles.twoCol}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.inputLabel} numberOfLines={1}>
-                  Check-In Date
-                </Text>
-                <TextInput
-                  value={checkInDate}
-                  onChangeText={setCheckInDate}
-                  placeholder="YYYY-MM-DD"
-                  style={styles.input}
-                />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.inputLabel} numberOfLines={1}>
-                  Check-Out Date
-                </Text>
-                <TextInput
-                  value={checkOutDate}
-                  onChangeText={setCheckOutDate}
-                  placeholder="YYYY-MM-DD"
-                  style={styles.input}
-                />
-              </View>
+              <Text style={styles.inputLabel}>Advance Paid Now (₹)</Text>
+              <TextInput
+                value={advanceAmt}
+                onChangeText={setAdvanceAmt}
+                keyboardType="numeric"
+                placeholder="0"
+                style={styles.input}
+              />
             </View>
 
-            <View style={styles.twoCol}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.inputLabel} numberOfLines={1}>
-                  Tariff / Night (₹)
-                </Text>
-                <TextInput
-                  value={ratePerNight}
-                  onChangeText={setRatePerNight}
-                  keyboardType="numeric"
-                  style={styles.input}
-                />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.inputLabel} numberOfLines={1}>
-                  Advance Paid (₹)
-                </Text>
-                <TextInput
-                  value={advanceAmt}
-                  onChangeText={setAdvanceAmt}
-                  keyboardType="numeric"
-                  style={styles.input}
-                />
-              </View>
-            </View>
-
-            {withGst && (
-              <View style={styles.twoCol}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.inputLabel} numberOfLines={1}>
-                    Company (Optional)
-                  </Text>
-                  <TextInput
-                    value={companyName}
-                    onChangeText={setCompanyName}
-                    placeholder="Corporate Name"
-                    placeholderTextColor={COLORS.textMuted}
-                    style={styles.input}
-                  />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.inputLabel} numberOfLines={1}>
-                    Company GSTIN
-                  </Text>
-                  <TextInput
-                    value={gstNumber}
-                    onChangeText={setGstNumber}
-                    autoCapitalize="characters"
-                    placeholder="22AAAAA0000A1Z5"
-                    placeholderTextColor={COLORS.textMuted}
-                    style={styles.input}
-                  />
-                </View>
-              </View>
-            )}
-
-            {subMode === 'checkin' && (
-              <>
-                <View style={styles.twoCol}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.inputLabel} numberOfLines={1}>
-                      Arrival Time (12h AM/PM)
-                    </Text>
-                    <TextInput
-                      value={arrivalTimeInput}
-                      onChangeText={setArrivalTimeInput}
-                      placeholder="e.g. 09:30 AM"
-                      placeholderTextColor={COLORS.textMuted}
-                      style={styles.input}
-                    />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.inputLabel} numberOfLines={1}>
-                      Departure Time (12h)
-                    </Text>
-                    <TextInput
-                      value={departureTimeInput}
-                      onChangeText={setDepartureTimeInput}
-                      placeholder="e.g. 11:00 AM"
-                      placeholderTextColor={COLORS.textMuted}
-                      style={styles.input}
-                    />
-                  </View>
-                </View>
-
-                <View
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    gap: 8,
-                    marginBottom: 10,
-                    backgroundColor: '#FDF8EE',
-                    borderWidth: 1,
-                    borderColor: COLORS.gold,
-                    borderRadius: 12,
-                    padding: 10,
-                  }}
-                >
-                  <TouchableOpacity
-                    onPress={() => setEarlyCheckInApplied((p) => !p)}
-                    style={{
-                      flex: 1,
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      gap: 8,
-                    }}
-                  >
-                    <View
-                      style={{
-                        width: 18,
-                        height: 18,
-                        borderRadius: 5,
-                        borderWidth: 1.5,
-                        borderColor: earlyCheckInApplied ? COLORS.emerald : COLORS.textSecondary,
-                        backgroundColor: earlyCheckInApplied ? COLORS.emerald : '#FFFFFF',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                      }}
-                    >
-                      {earlyCheckInApplied && (
-                        <Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: '800' }}>✓</Text>
-                      )}
-                    </View>
-                    <Text style={{ fontSize: 12, fontWeight: '700', color: COLORS.espresso }}>
-                      Early Check-In Charge
-                    </Text>
-                  </TouchableOpacity>
-                  {earlyCheckInApplied && (
-                    <TextInput
-                      value={earlyCheckInAmt}
-                      onChangeText={setEarlyCheckInAmt}
-                      keyboardType="numeric"
-                      placeholder="₹500"
-                      style={[styles.input, { width: 92, marginBottom: 0 }]}
-                    />
-                  )}
-                </View>
-              </>
-            )}
-
-            {/* Available Extra Services */}
-            <View style={styles.servicesBox}>
-              <View style={styles.servicesBoxHeader}>
-                <View style={{ flex: 1, marginRight: 8 }}>
-                  <Text style={styles.servicesBoxTitle}>
-                    ✨ AVAILABLE EXTRA SERVICES ({serviceCatalog.length})
-                  </Text>
-                  <Text style={{ fontSize: 11, color: COLORS.textSecondary, marginTop: 2 }}>
-                    Tap to add extra services to this{' '}
-                    {subMode === 'advance' ? 'Advance Booking' : 'Check-In'}
-                  </Text>
-                </View>
-                <TouchableOpacity
-                  onPress={() => setSubMode('services')}
-                  style={styles.manageServicesBtn}
-                >
-                  <Text style={{ fontSize: 11, fontWeight: '800', color: '#0F766E' }}>
-                    + Manage
-                  </Text>
-                </TouchableOpacity>
-              </View>
-
-              {serviceCatalog.length === 0 ? (
-                <Text style={{ fontSize: 11, color: COLORS.textMuted, fontStyle: 'italic' }}>
-                  No extra services added yet. Tap "+ Manage" to add service categories.
-                </Text>
-              ) : (
-                serviceCatalog.map((srv) => {
-                  const sid = String(srv.id);
-                  const picked = selectedServiceIds.includes(sid);
-                  const price = servicePriceOf(srv);
-                  return (
-                    <TouchableOpacity
-                      key={sid}
-                      activeOpacity={0.8}
-                      onPress={() =>
-                        setSelectedServiceIds((prev) =>
-                          prev.includes(sid) ? prev.filter((x) => x !== sid) : [...prev, sid]
-                        )
-                      }
-                      style={[styles.servicePickRow, picked && styles.servicePickRowActive]}
-                    >
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
-                        {picked ? (
-                          <CheckSquare size={17} color={COLORS.emerald} />
-                        ) : (
-                          <Square size={17} color={COLORS.textMuted} />
-                        )}
-                        <Text style={styles.servicePickName} numberOfLines={1}>
-                          {srv.serviceName || 'Extra Service'}
-                        </Text>
-                      </View>
-                      <Text style={{ fontSize: 12, fontWeight: '800', color: '#0F766E' }}>
-                        + ₹{price.toLocaleString('en-IN')}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })
-              )}
-            </View>
-
-            {/* Live Bill Breakdown */}
+            {/* Live Reconciled Bill Breakdown */}
             <View style={styles.summaryBox}>
               <View style={styles.sumRow}>
                 <Text style={styles.sumLabel}>
-                  Room Tariff ({activeRoomsForCalc.length} Rm × {nights} Night
-                  {billSettings.roomRateIncludesGst && withGst ? ', Pre-Tax' : ''}):
+                  Room Tariff ({activeRoomsForCalc.length} Rm × {nights}N{gstMode === 'including_gst' ? ', Pre-Tax' : ''}):
                 </Text>
                 <Text style={styles.sumVal}>₹{formatMoney(roomSub)}</Text>
               </View>
-              {servicesTotal > 0 && (
+              {earlyChargeVal > 0 && (
                 <View style={styles.sumRow}>
-                  <Text style={styles.sumLabel}>
-                    Extra Services ({tickedServices.length} selected):
-                  </Text>
+                  <Text style={styles.sumLabel}>Early Check-In Charge:</Text>
+                  <Text style={styles.sumVal}>+ ₹{formatMoney(earlyChargeVal)}</Text>
+                </View>
+              )}
+              {lateChargeVal > 0 && (
+                <View style={styles.sumRow}>
+                  <Text style={styles.sumLabel}>Late Check-Out Charge:</Text>
+                  <Text style={styles.sumVal}>+ ₹{formatMoney(lateChargeVal)}</Text>
+                </View>
+              )}
+              {extraBedChargeVal > 0 && (
+                <View style={styles.sumRow}>
+                  <Text style={styles.sumLabel}>Extra Bed ({extraBedQty} × {nights}N):</Text>
+                  <Text style={styles.sumVal}>+ ₹{formatMoney(extraBedChargeVal)}</Text>
+                </View>
+              )}
+              {checkInWaterChargeVal > 0 && (
+                <View style={styles.sumRow}>
+                  <Text style={styles.sumLabel}>Water Bottles ({checkInWaterPaid} × ₹{waterBottleRateVal}):</Text>
+                  <Text style={styles.sumVal}>+ ₹{formatMoney(checkInWaterChargeVal)}</Text>
+                </View>
+              )}
+              {(servicesTotal + customAddonVal) > 0 && (
+                <View style={styles.sumRow}>
+                  <Text style={styles.sumLabel}>Extra Services &amp; Add-Ons:</Text>
                   <Text style={[styles.sumVal, { color: '#0F766E' }]}>
-                    + ₹{formatMoney(servicesTotal)}
+                    + ₹{formatMoney(servicesTotal + customAddonVal)}
+                  </Text>
+                </View>
+              )}
+              {resolvedDiscountAmt > 0 && (
+                <View style={styles.sumRow}>
+                  <Text style={styles.sumLabel}>Discount:</Text>
+                  <Text style={[styles.sumVal, { color: COLORS.emerald }]}>
+                    − ₹{formatMoney(resolvedDiscountAmt)}
                   </Text>
                 </View>
               )}
@@ -1201,6 +1702,10 @@ export const FrontDeskScreen: React.FC = () => {
               <View style={[styles.sumRow, styles.sumTotalRow]}>
                 <Text style={styles.sumTotalLabel}>Total Payable:</Text>
                 <Text style={styles.sumTotalVal}>₹{formatMoney(grandTotal)}</Text>
+              </View>
+              <View style={styles.sumRow}>
+                <Text style={styles.sumLabel}>Advance Paid ({paymentMethod}):</Text>
+                <Text style={[styles.sumVal, { color: COLORS.emerald }]}>₹{formatMoney(Number(advanceAmt) || 0)}</Text>
               </View>
               <View style={styles.sumRow}>
                 <Text style={styles.sumLabel}>Balance Due at Hotel:</Text>
@@ -1222,7 +1727,9 @@ export const FrontDeskScreen: React.FC = () => {
                   ? `Confirm Advance Booking (${activeRoomsForCalc.length} Room${
                       activeRoomsForCalc.length > 1 ? 's' : ''
                     })`
-                  : 'Complete Guest Check-In'}
+                  : `Complete Guest Check-In (${activeRoomsForCalc.length} Room${
+                      activeRoomsForCalc.length > 1 ? 's' : ''
+                    })`}
               </Text>
             </TouchableOpacity>
           </View>
@@ -1412,10 +1919,10 @@ export const FrontDeskScreen: React.FC = () => {
                         }}
                         style={[styles.roomChip, sel && styles.roomChipSelected]}
                       >
-                        <Text style={[styles.roomChipNum, sel && { color: COLORS.goldBright }]}>
+                        <Text style={[styles.roomChipNum, sel && { color: COLORS.espresso }]}>
                           Rm {b.roomNumber}
                         </Text>
-                        <Text style={[styles.roomChipSub, sel && { color: '#FFF' }]}>
+                        <Text style={[styles.roomChipSub, sel && { color: COLORS.espresso }]}>
                           {b.guestName}
                         </Text>
                       </TouchableOpacity>
@@ -1806,7 +2313,12 @@ export const FrontDeskScreen: React.FC = () => {
                         />
                       </View>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.inputLabel}>Collecting Now (₹)</Text>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <Text style={styles.inputLabel}>Collect Now (₹)</Text>
+                          <TouchableOpacity onPress={() => setCoCollectedNow(String(Math.max(0, Math.round(b.balance))))}>
+                            <Text style={{ fontSize: 10, fontWeight: '800', color: COLORS.emerald }}>Full Due</Text>
+                          </TouchableOpacity>
+                        </View>
                         <TextInput
                           value={coCollectedNow}
                           onChangeText={setCoCollectedNow}
@@ -1814,6 +2326,28 @@ export const FrontDeskScreen: React.FC = () => {
                           style={styles.input}
                         />
                       </View>
+                    </View>
+
+                    <Text style={styles.inputLabel}>Settlement Payment Mode</Text>
+                    <View style={{ flexDirection: 'row', gap: 6, marginBottom: 8 }}>
+                      {['Cash', 'UPI', 'Card', 'Bank Transfer'].map((pm) => {
+                        const active = coPayMethod === pm;
+                        return (
+                          <TouchableOpacity
+                            key={pm}
+                            onPress={() => setCoPayMethod(pm)}
+                            style={[
+                              styles.bulkToggleBtn,
+                              { flex: 1, alignItems: 'center', paddingVertical: 7 },
+                              active && { backgroundColor: COLORS.gold, borderColor: COLORS.goldDark },
+                            ]}
+                          >
+                            <Text style={[styles.bulkToggleText, { fontSize: 11 }, active && { color: COLORS.espresso, fontWeight: '800' }]}>
+                              {pm === 'Bank Transfer' ? 'Bank' : pm}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
                     </View>
 
                     <View style={styles.summaryBox}>
@@ -2113,8 +2647,8 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
   },
   roomChipSelected: {
-    backgroundColor: COLORS.espresso,
-    borderColor: COLORS.gold,
+    backgroundColor: COLORS.gold,
+    borderColor: COLORS.goldDark,
   },
   roomChipNum: { fontSize: 12.5, fontWeight: '800', color: COLORS.textPrimary },
   roomChipSub: { fontSize: 10.5, color: COLORS.textSecondary, marginTop: 2 },
@@ -2192,14 +2726,14 @@ const styles = StyleSheet.create({
   primaryActionBtn: {
     minHeight: 48,
     borderRadius: 14,
-    backgroundColor: COLORS.espresso,
+    backgroundColor: COLORS.gold,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 14,
     borderWidth: 1,
-    borderColor: COLORS.gold,
+    borderColor: COLORS.goldDark,
   },
-  primaryActionText: { fontSize: 13.5, fontWeight: '800', color: COLORS.goldBright },
+  primaryActionText: { fontSize: 13.5, fontWeight: '800', color: COLORS.espresso },
   emptyText: { fontSize: 12.5, color: COLORS.textMuted, paddingVertical: 12 },
   inhouseTopRow: {
     flexDirection: 'row',

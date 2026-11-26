@@ -515,13 +515,13 @@ export const ServiceStoreModulesScreen: React.FC<Props> = ({ moduleId }) => {
                   onPress={() => setPostToRoom((p) => !p)}
                   style={[
                     styles.toggleBtn,
-                    postToRoom && { backgroundColor: COLORS.espresso },
+                    postToRoom && { backgroundColor: COLORS.gold, borderColor: COLORS.goldDark },
                   ]}
                 >
                   <Text
                     style={[
                       styles.toggleBtnText,
-                      postToRoom && { color: COLORS.goldBright },
+                      postToRoom && { color: COLORS.espresso },
                     ]}
                   >
                     {postToRoom ? 'Post to Room Folio' : 'Direct Cash/UPI'}
@@ -656,14 +656,14 @@ export const ServiceStoreModulesScreen: React.FC<Props> = ({ moduleId }) => {
                             style={[
                               styles.toggleBtn,
                               { paddingHorizontal: 10, paddingVertical: 6 },
-                              isSel && { backgroundColor: COLORS.espresso },
+                              isSel && { backgroundColor: COLORS.gold, borderColor: COLORS.goldDark },
                             ]}
                           >
                             <Text
                               style={[
                                 styles.toggleBtnText,
                                 { fontSize: 11 },
-                                isSel && { color: COLORS.goldBright },
+                                isSel && { color: COLORS.espresso },
                               ]}
                             >
                               {catName}
@@ -1179,15 +1179,15 @@ const styles = StyleSheet.create({
   primaryBtn: {
     minHeight: 44,
     borderRadius: 12,
-    backgroundColor: COLORS.espresso,
+    backgroundColor: COLORS.gold,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 14,
     borderWidth: 1,
-    borderColor: COLORS.gold,
+    borderColor: COLORS.goldDark,
     marginBottom: 6,
   },
-  primaryBtnText: { fontSize: 12.5, fontWeight: '800', color: COLORS.goldBright },
+  primaryBtnText: { fontSize: 12.5, fontWeight: '800', color: COLORS.espresso },
   rowItem: {
     flexDirection: 'row',
     alignItems: 'center',

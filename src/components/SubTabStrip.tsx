@@ -36,7 +36,7 @@ export const SubTabStrip: React.FC<SubTabStripProps> = ({ tabs, activeId, onSele
               {IconComp ? (
                 <IconComp
                   size={14}
-                  color={isActive ? COLORS.goldBright : COLORS.textSecondary}
+                  color={isActive ? COLORS.espresso : COLORS.textSecondary}
                   strokeWidth={isActive ? 2.4 : 2}
                 />
               ) : null}
@@ -83,8 +83,8 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   pillActive: {
-    backgroundColor: COLORS.espresso,
-    borderColor: COLORS.gold,
+    backgroundColor: COLORS.gold,
+    borderColor: COLORS.goldDark,
   },
   pillText: {
     fontSize: 12,
@@ -92,7 +92,7 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
   },
   pillTextActive: {
-    color: COLORS.goldBright,
+    color: COLORS.espresso,
     fontWeight: '800',
   },
   countChip: {
@@ -105,7 +105,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   countChipActive: {
-    backgroundColor: 'rgba(196, 154, 58, 0.25)',
+    backgroundColor: 'rgba(255, 255, 255, 0.72)',
   },
   countText: {
     fontSize: 10,
@@ -113,6 +113,6 @@ const styles = StyleSheet.create({
     color: COLORS.espresso,
   },
   countTextActive: {
-    color: COLORS.goldBright,
+    color: COLORS.espresso,
   },
 });

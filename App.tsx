@@ -15,7 +15,7 @@ import { openWhatsAppSafe } from './src/utils/iosPlatformHelpers';
 import { PmsProvider, usePms } from './src/context/PmsContext';
 import { AdminLoginScreen } from './src/screens/AdminLoginScreen';
 import { DashboardScreen } from './src/screens/DashboardScreen';
-import { FrontDeskScreen } from './src/screens/FrontDeskScreen';
+import { FrontDeskScreen, FrontSubMode } from './src/screens/FrontDeskScreen';
 import { RoomsScreen } from './src/screens/RoomsScreen';
 import { InvoicesScreen } from './src/screens/InvoicesScreen';
 import { ServiceStoreModulesScreen } from './src/screens/ServiceStoreModulesScreen';
@@ -40,7 +40,17 @@ const AdminMobileShell: React.FC = () => {
   } = usePms();
 
   const [activeModule, setActiveModule] = useState<AdminModuleId>('dashboard');
+  const [frontSubMode, setFrontSubMode] = useState<FrontSubMode>('checkin');
+  const [frontNavTick, setFrontNavTick] = useState(0);
   const [drawerOpen, setDrawerOpen] = useState(false);
+
+  const navigateModule = (mod: AdminModuleId, nextFrontSub?: FrontSubMode) => {
+    if (mod === 'frontDesk' && nextFrontSub) {
+      setFrontSubMode(nextFrontSub);
+      setFrontNavTick((t) => t + 1);
+    }
+    setActiveModule(mod);
+  };
 
   if (bootstrapping) {
     return (
@@ -142,9 +152,11 @@ const AdminMobileShell: React.FC = () => {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         {activeModule === 'dashboard' && (
-          <DashboardScreen onNavigateModule={setActiveModule} />
+          <DashboardScreen onNavigateModule={navigateModule} />
         )}
-        {activeModule === 'frontDesk' && <FrontDeskScreen />}
+        {activeModule === 'frontDesk' && (
+          <FrontDeskScreen initialSubMode={frontSubMode} initialNavTick={frontNavTick} />
+        )}
         {activeModule === 'rooms' && <RoomsScreen />}
         {activeModule === 'invoice' && <InvoicesScreen />}
         {(activeModule === 'housekeeping' ||

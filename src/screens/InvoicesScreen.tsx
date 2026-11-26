@@ -890,7 +890,7 @@ export const InvoicesScreen: React.FC = () => {
                         onPress={() => handlePrintInvoicePdf(viewingInvoice)}
                         style={styles.shareBtn}
                       >
-                        <Printer size={15} color={COLORS.goldBright} />
+                        <Printer size={15} color={COLORS.espresso} />
                         <Text style={styles.shareBtnText} numberOfLines={1}>
                           Print / Download PDF
                         </Text>
@@ -953,7 +953,7 @@ export const InvoicesScreen: React.FC = () => {
                       onPress={() => setSelectedBookingId(b.id)}
                       style={[styles.bkgChip, sel && styles.bkgChipSel]}
                     >
-                      <Text style={[styles.bkgChipText, sel && { color: COLORS.goldBright }]}>
+                      <Text style={[styles.bkgChipText, sel && { color: COLORS.espresso, fontWeight: '800' }]}>
                         {b.guestName} (Rm {b.roomNumber})
                       </Text>
                     </TouchableOpacity>
@@ -1341,21 +1341,23 @@ const styles = StyleSheet.create({
     minHeight: 45,
     paddingHorizontal: 10,
     borderRadius: 12,
-    backgroundColor: COLORS.espresso,
+    backgroundColor: COLORS.gold,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
     borderWidth: 1,
-    borderColor: COLORS.gold,
+    borderColor: COLORS.goldDark,
   },
-  shareBtnText: { fontSize: 12, fontWeight: '800', color: COLORS.goldBright },
+  shareBtnText: { fontSize: 12, fontWeight: '800', color: COLORS.espresso },
   pdfShareSecondaryBtn: {
     flex: 0.9,
     minHeight: 45,
     paddingHorizontal: 10,
     borderRadius: 12,
-    backgroundColor: COLORS.gold,
+    backgroundColor: '#FAF0D7',
+    borderWidth: 1,
+    borderColor: COLORS.gold,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1372,7 +1374,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-  bkgChipSel: { backgroundColor: COLORS.espresso, borderColor: COLORS.gold },
+  bkgChipSel: { backgroundColor: COLORS.gold, borderColor: COLORS.goldDark },
   bkgChipText: { fontSize: 12, fontWeight: '700', color: COLORS.textPrimary },
   infoNotice: {
     backgroundColor: COLORS.amberSoft,
@@ -1415,12 +1417,12 @@ const styles = StyleSheet.create({
   generateConfirmBtn: {
     minHeight: 46,
     borderRadius: 13,
-    backgroundColor: COLORS.espresso,
+    backgroundColor: COLORS.gold,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 14,
     borderWidth: 1,
-    borderColor: COLORS.gold,
+    borderColor: COLORS.goldDark,
   },
-  generateConfirmText: { fontSize: 13, fontWeight: '800', color: COLORS.goldBright },
+  generateConfirmText: { fontSize: 13, fontWeight: '800', color: COLORS.espresso },
 });

@@ -75,7 +75,7 @@ export const AdminLoginScreen: React.FC<AdminLoginScreenProps> = ({ onLoginSucce
             <Building2 size={30} color={COLORS.espresso} strokeWidth={2.3} />
           </View>
           <View style={styles.portalBadge}>
-            <ShieldCheck size={12} color={COLORS.goldBright} />
+            <ShieldCheck size={12} color={COLORS.goldDark} />
             <Text style={styles.portalBadgeText}>PROPERTY OPERATIONS DESK • /ADMIN</Text>
           </View>
           <Text style={styles.title}>DirectStay Admin</Text>
@@ -126,12 +126,12 @@ export const AdminLoginScreen: React.FC<AdminLoginScreenProps> = ({ onLoginSucce
               <View style={styles.fieldGroup}>
                 <Text style={styles.label}>ADMIN / STAFF USERNAME OR EMAIL</Text>
                 <View style={styles.inputRow}>
-                  <User size={17} color={COLORS.goldBright} />
+                  <User size={17} color={COLORS.goldDark} />
                   <TextInput
                     value={username}
                     onChangeText={setUsername}
                     placeholder="Enter Hotel Admin or Staff ID"
-                    placeholderTextColor="#7C7067"
+                    placeholderTextColor={COLORS.textMuted}
                     autoCapitalize="none"
                     autoCorrect={false}
                     textContentType="username"
@@ -145,12 +145,12 @@ export const AdminLoginScreen: React.FC<AdminLoginScreenProps> = ({ onLoginSucce
               <View style={styles.fieldGroup}>
                 <Text style={styles.label}>PASSWORD</Text>
                 <View style={styles.inputRow}>
-                  <Lock size={17} color={COLORS.goldBright} />
+                  <Lock size={17} color={COLORS.goldDark} />
                   <TextInput
                     value={password}
                     onChangeText={setPassword}
                     placeholder="Enter password"
-                    placeholderTextColor="#7C7067"
+                    placeholderTextColor={COLORS.textMuted}
                     secureTextEntry={!showPass}
                     autoCapitalize="none"
                     textContentType="password"
@@ -196,7 +196,7 @@ export const AdminLoginScreen: React.FC<AdminLoginScreenProps> = ({ onLoginSucce
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: COLORS.espresso,
+    backgroundColor: COLORS.bg,
   },
   scroll: {
     flexGrow: 1,
@@ -223,47 +223,47 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 5,
     borderRadius: 999,
-    backgroundColor: 'rgba(196, 154, 58, 0.16)',
+    backgroundColor: '#FAF0D7',
     borderWidth: 1,
-    borderColor: 'rgba(224, 189, 107, 0.35)',
+    borderColor: COLORS.gold,
     marginBottom: 10,
   },
   portalBadgeText: {
     fontSize: 10,
     fontWeight: '800',
-    color: COLORS.goldBright,
+    color: COLORS.goldDark,
     letterSpacing: 0.8,
   },
   title: {
     fontSize: 26,
     fontWeight: '800',
-    color: '#FFFFFF',
+    color: COLORS.textPrimary,
     marginBottom: 6,
   },
   subtitle: {
     fontSize: 12.5,
-    color: '#B8ABA0',
+    color: COLORS.textSecondary,
     textAlign: 'center',
     lineHeight: 18,
     paddingHorizontal: 12,
   },
   card: {
-    backgroundColor: COLORS.espressoLight,
+    backgroundColor: '#FFFFFF',
     borderRadius: 22,
     padding: 20,
     borderWidth: 1,
-    borderColor: COLORS.espressoBorder,
+    borderColor: COLORS.border,
   },
   errorBanner: {
-    backgroundColor: 'rgba(225, 29, 72, 0.16)',
-    borderColor: 'rgba(251, 113, 133, 0.4)',
+    backgroundColor: COLORS.roseSoft,
+    borderColor: COLORS.roseBorder,
     borderWidth: 1,
     padding: 12,
     borderRadius: 12,
     marginBottom: 14,
   },
   errorText: {
-    color: '#FDA4AF',
+    color: COLORS.rose,
     fontSize: 12,
     fontWeight: '600',
   },
@@ -273,16 +273,16 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 10.5,
     fontWeight: '800',
-    color: COLORS.goldBright,
+    color: COLORS.goldDark,
     marginBottom: 7,
     letterSpacing: 0.6,
   },
   inputRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#140F0C',
+    backgroundColor: '#F8FAFC',
     borderWidth: 1,
-    borderColor: '#3A2E25',
+    borderColor: COLORS.border,
     borderRadius: 14,
     paddingHorizontal: 13,
     height: 50,
@@ -290,7 +290,7 @@ const styles = StyleSheet.create({
   },
   input: {
     flex: 1,
-    color: '#FFFFFF',
+    color: COLORS.textPrimary,
     fontSize: 14,
     fontWeight: '600',
   },
@@ -301,6 +301,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 6,
+    borderWidth: 1,
+    borderColor: COLORS.goldDark,
   },
   signInBtnText: {
     color: COLORS.espresso,
@@ -311,7 +313,7 @@ const styles = StyleSheet.create({
     marginTop: 14,
     textAlign: 'center',
     fontSize: 11,
-    color: '#8D7F73',
+    color: COLORS.textMuted,
     fontWeight: '600',
   },
   blockedBox: {
@@ -322,12 +324,12 @@ const styles = StyleSheet.create({
   blockedTitle: {
     fontSize: 16,
     fontWeight: '800',
-    color: '#FDE68A',
+    color: COLORS.amber,
     textAlign: 'center',
   },
   blockedSub: {
     fontSize: 12.5,
-    color: '#D6C9BE',
+    color: COLORS.textSecondary,
     textAlign: 'center',
     lineHeight: 18,
   },
@@ -338,9 +340,10 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1,
     borderColor: COLORS.gold,
+    backgroundColor: '#FAF0D7',
   },
   secondaryBtnText: {
-    color: COLORS.goldBright,
+    color: COLORS.espresso,
     fontWeight: '700',
     fontSize: 12.5,
   },

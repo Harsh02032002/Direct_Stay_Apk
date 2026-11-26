@@ -156,6 +156,21 @@ export const FinanceGovernanceModulesScreen: React.FC<Props> = ({ moduleId }) =>
   const [profCheckOutTime, setProfCheckOutTime] = useState(
     hotelProfile?.checkOutTime || '11:00 AM'
   );
+  const [profEarlyEnabled, setProfEarlyEnabled] = useState<boolean>(
+    Boolean(hotelProfile?.earlyCheckInEnabled)
+  );
+  const [profEarlyType, setProfEarlyType] = useState<'fixed' | 'hourly'>(
+    hotelProfile?.earlyCheckInType === 'hourly' ? 'hourly' : 'fixed'
+  );
+  const [profEarlyFixedRate, setProfEarlyFixedRate] = useState(
+    String(hotelProfile?.earlyCheckInFixedRate ?? hotelProfile?.earlyCheckInFee ?? 500)
+  );
+  const [profEarlyHourlyRate, setProfEarlyHourlyRate] = useState(
+    String(hotelProfile?.earlyCheckInHourlyRate ?? 200)
+  );
+  const [profLateFee, setProfLateFee] = useState(
+    String(hotelProfile?.lateCheckOutFee ?? 500)
+  );
 
   useEffect(() => {
     if (hotelProfile) {
@@ -184,6 +199,13 @@ export const FinanceGovernanceModulesScreen: React.FC<Props> = ({ moduleId }) =>
       setProfWaterBottleRate(String(normalized.waterBottleRate));
       setProfCheckInTime(hotelProfile.checkInTime || '12:00 PM');
       setProfCheckOutTime(hotelProfile.checkOutTime || '11:00 AM');
+      setProfEarlyEnabled(Boolean(hotelProfile.earlyCheckInEnabled));
+      setProfEarlyType(hotelProfile.earlyCheckInType === 'hourly' ? 'hourly' : 'fixed');
+      setProfEarlyFixedRate(
+        String(hotelProfile.earlyCheckInFixedRate ?? hotelProfile.earlyCheckInFee ?? 500)
+      );
+      setProfEarlyHourlyRate(String(hotelProfile.earlyCheckInHourlyRate ?? 200));
+      setProfLateFee(String(hotelProfile.lateCheckOutFee ?? 500));
     }
   }, [hotelProfile?.id]);
 
@@ -687,16 +709,16 @@ export const FinanceGovernanceModulesScreen: React.FC<Props> = ({ moduleId }) =>
                   <View
                     style={[
                       styles.statBox,
-                      { backgroundColor: COLORS.espresso, borderWidth: 1, borderColor: COLORS.gold },
+                      { backgroundColor: '#FDF8EE', borderWidth: 1.5, borderColor: COLORS.gold },
                     ]}
                   >
-                    <Text style={[styles.statLabel, { color: COLORS.goldBright }]}>
+                    <Text style={[styles.statLabel, { color: COLORS.goldDark }]}>
                       5. Net Balance
                     </Text>
                     <Text
                       style={[
                         styles.statVal,
-                        { color: netBalance >= 0 ? '#FFFFFF' : '#FCA5A5' },
+                        { color: netBalance >= 0 ? COLORS.espresso : COLORS.rose },
                       ]}
                     >
                       ₹{formatMoney(netBalance)}
@@ -779,13 +801,13 @@ export const FinanceGovernanceModulesScreen: React.FC<Props> = ({ moduleId }) =>
                     onPress={() => setExpMode(m)}
                     style={[
                       styles.modePill,
-                      expMode === m && { backgroundColor: COLORS.espresso, borderColor: COLORS.gold },
+                      expMode === m && { backgroundColor: COLORS.gold, borderColor: COLORS.goldDark },
                     ]}
                   >
                     <Text
                       style={[
                         styles.modePillText,
-                        expMode === m && { color: COLORS.goldBright },
+                        expMode === m && { color: COLORS.espresso },
                       ]}
                     >
                       {m}
@@ -1244,7 +1266,7 @@ export const FinanceGovernanceModulesScreen: React.FC<Props> = ({ moduleId }) =>
   const renewGstRate = chosenPlan.gstRate;
   const renewGstAmt = Math.round(renewBase * (renewGstRate / 100));
   const renewTotal = renewBase + renewGstAmt;
-  const upiId = state.systemWebsite?.paymentSettings?.upiId || 'directstay@upi';
+  const upiId = state.systemWebsite?.paymentSettings?.upiId || '7684023584-4@ybl';
   const upiPayee = state.systemWebsite?.paymentSettings?.upiPayeeName || 'DirectStay Hospitality SaaS';
   const waRaw = String(
     state.systemWebsite?.whatsappNumber || state.systemWebsite?.supportPhone || '917978563771'
@@ -1593,6 +1615,81 @@ export const FinanceGovernanceModulesScreen: React.FC<Props> = ({ moduleId }) =>
           </View>
         </View>
 
+        {/* Early Check-In & Late Check-Out Policy Rules (Synced with Web /admin) */}
+        <TouchableOpacity
+          activeOpacity={0.8}
+          onPress={() => setProfEarlyEnabled((p) => !p)}
+          style={[
+            styles.toggleRow,
+            profEarlyEnabled && {
+              borderColor: COLORS.amber,
+              backgroundColor: COLORS.amberSoft,
+            },
+          ]}
+        >
+          {profEarlyEnabled ? (
+            <CheckSquare size={18} color={COLORS.amber} />
+          ) : (
+            <Square size={18} color={COLORS.textSecondary} />
+          )}
+          <View style={{ flex: 1 }}>
+            <Text style={styles.toggleTitle}>Enable Early Check-In Surcharge Rule</Text>
+            <Text style={styles.toggleSub}>
+              Configure default Fixed or Hourly Early Check-In fee &amp; Late Check-Out fee for Check-In v3.
+            </Text>
+          </View>
+        </TouchableOpacity>
+
+        {profEarlyEnabled && (
+          <View style={{ marginBottom: 10 }}>
+            <Text style={styles.label}>Early Check-In Charge Type</Text>
+            <View style={[styles.twoCol, { marginBottom: 6 }]}>
+              <TouchableOpacity
+                onPress={() => setProfEarlyType('fixed')}
+                style={[
+                  styles.toggleRow,
+                  { flex: 1, justifyContent: 'center', marginBottom: 0, paddingVertical: 8 },
+                  profEarlyType === 'fixed' && { borderColor: COLORS.espresso, backgroundColor: '#FDF8EE' },
+                ]}
+              >
+                <Text style={styles.toggleTitle}>Fixed Fee (₹)</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => setProfEarlyType('hourly')}
+                style={[
+                  styles.toggleRow,
+                  { flex: 1, justifyContent: 'center', marginBottom: 0, paddingVertical: 8 },
+                  profEarlyType === 'hourly' && { borderColor: COLORS.espresso, backgroundColor: '#FDF8EE' },
+                ]}
+              >
+                <Text style={styles.toggleTitle}>Hourly Rate (₹/hr)</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.twoCol}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.label}>
+                  {profEarlyType === 'hourly' ? 'Early Check-In ₹ / Hour' : 'Early Check-In Fixed ₹'}
+                </Text>
+                <TextInput
+                  value={profEarlyType === 'hourly' ? profEarlyHourlyRate : profEarlyFixedRate}
+                  onChangeText={profEarlyType === 'hourly' ? setProfEarlyHourlyRate : setProfEarlyFixedRate}
+                  keyboardType="numeric"
+                  style={styles.input}
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.label}>Late Check-Out Fee (₹)</Text>
+                <TextInput
+                  value={profLateFee}
+                  onChangeText={setProfLateFee}
+                  keyboardType="numeric"
+                  style={styles.input}
+                />
+              </View>
+            </View>
+          </View>
+        )}
+
         <TouchableOpacity
           onPress={async () => {
             const roomGst = Number(profRoomGstRate) >= 0 ? Number(profRoomGstRate) : 5;
@@ -1601,6 +1698,9 @@ export const FinanceGovernanceModulesScreen: React.FC<Props> = ({ moduleId }) =>
             const cleanPrefix = (profInvPrefix.trim() || 'INV').replace(/[-/\s]+$/, '');
             const cleanGrc = (profGrcPrefix.trim() || 'GRC').replace(/[-/\s]+$/, '');
             const cleanSeq = Math.max(1, Math.floor(Number(profNextSeq) || 1001));
+            const earlyFixedNum = Math.max(0, Number(profEarlyFixedRate) || 0);
+            const earlyHourlyNum = Math.max(0, Number(profEarlyHourlyRate) || 0);
+            const lateFeeNum = Math.max(0, Number(profLateFee) || 0);
 
             await updateHotelProfileSettings({
               name: profName.trim() || hotelProfile?.name || 'DirectStay Property',
@@ -1625,6 +1725,12 @@ export const FinanceGovernanceModulesScreen: React.FC<Props> = ({ moduleId }) =>
               waterBottleRate: wbRateVal,
               checkInTime: profCheckInTime.trim(),
               checkOutTime: profCheckOutTime.trim(),
+              earlyCheckInEnabled: profEarlyEnabled,
+              earlyCheckInType: profEarlyType,
+              earlyCheckInFixedRate: earlyFixedNum,
+              earlyCheckInFee: earlyFixedNum,
+              earlyCheckInHourlyRate: earlyHourlyNum,
+              lateCheckOutFee: lateFeeNum,
             });
             Alert.alert(
               'Settings Saved & Synced',
@@ -1682,15 +1788,15 @@ const styles = StyleSheet.create({
   primaryBtn: {
     minHeight: 45,
     borderRadius: 12,
-    backgroundColor: COLORS.espresso,
+    backgroundColor: COLORS.gold,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 14,
     borderWidth: 1,
-    borderColor: COLORS.gold,
+    borderColor: COLORS.goldDark,
     marginTop: 4,
   },
-  primaryBtnText: { fontSize: 13, fontWeight: '800', color: COLORS.goldBright },
+  primaryBtnText: { fontSize: 13, fontWeight: '800', color: COLORS.espresso },
   rowItem: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1709,15 +1815,15 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   kpiBanner: {
-    backgroundColor: COLORS.espresso,
+    backgroundColor: '#FDF8EE',
     borderRadius: 14,
     padding: 14,
     marginBottom: 12,
-    borderWidth: 1,
+    borderWidth: 1.5,
     borderColor: COLORS.gold,
   },
-  kpiBannerLabel: { fontSize: 10, fontWeight: '800', color: COLORS.goldBright, letterSpacing: 0.8 },
-  kpiBannerVal: { fontSize: 20, fontWeight: '900', color: '#FFFFFF', marginTop: 3 },
+  kpiBannerLabel: { fontSize: 10, fontWeight: '800', color: COLORS.goldDark, letterSpacing: 0.8 },
+  kpiBannerVal: { fontSize: 20, fontWeight: '900', color: COLORS.espresso, marginTop: 3 },
   statBox: {
     flex: 1,
     borderRadius: 13,

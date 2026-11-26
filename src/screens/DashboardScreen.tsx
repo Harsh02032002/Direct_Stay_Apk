@@ -22,8 +22,10 @@ import { AdminModuleId } from '../types/pms';
 import { ALL_ADMIN_MODULES } from '../components/ModulesDrawerModal';
 import { daysRemainingSafe } from '../utils/iosPlatformHelpers';
 
+import type { FrontSubMode } from './FrontDeskScreen';
+
 interface DashboardScreenProps {
-  onNavigateModule: (mod: AdminModuleId) => void;
+  onNavigateModule: (mod: AdminModuleId, frontSubMode?: FrontSubMode) => void;
 }
 
 function formatINR(val: number): string {
@@ -141,49 +143,83 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onNavigateModu
           </View>
           <View
             style={{
-              backgroundColor: COLORS.espresso,
+              backgroundColor: COLORS.gold,
               paddingHorizontal: 10,
               paddingVertical: 6,
               borderRadius: 10,
+              borderWidth: 1,
+              borderColor: COLORS.goldDark,
             }}
           >
-            <Text style={{ fontSize: 11, fontWeight: '800', color: COLORS.goldBright }}>
+            <Text style={{ fontSize: 11, fontWeight: '800', color: COLORS.espresso }}>
               Renew Now →
             </Text>
           </View>
         </TouchableOpacity>
       )}
 
-      {/* Quick Front Desk Actions (Responsive Padded Pills — Never Clips!) */}
+      {/* Quick Front Desk Actions (Direct Walk-In Check-In + Advance Booking + GST Bills) */}
       <View style={styles.quickRow}>
         <TouchableOpacity
           activeOpacity={0.85}
-          onPress={() => onNavigateModule('frontDesk')}
-          style={[styles.quickBtn, { backgroundColor: COLORS.gold }]}
+          onPress={() => onNavigateModule('frontDesk', 'checkin')}
+          style={[styles.quickBtn, { backgroundColor: COLORS.gold, borderWidth: 1, borderColor: COLORS.goldDark }]}
         >
-          <CalendarPlus size={16} color={COLORS.espresso} />
+          <LogIn size={16} color={COLORS.espresso} />
           <Text
             style={[styles.quickBtnText, { color: COLORS.espresso }]}
             numberOfLines={1}
             adjustsFontSizeToFit
             minimumFontScale={0.8}
           >
-            + Advance / Walk-In
+            + Walk-In Check-In
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          activeOpacity={0.85}
+          onPress={() => onNavigateModule('frontDesk', 'advance')}
+          style={[styles.quickBtn, { backgroundColor: '#FDF8EE', borderWidth: 1.5, borderColor: COLORS.gold }]}
+        >
+          <CalendarPlus size={16} color={COLORS.goldDark} />
+          <Text
+            style={[styles.quickBtnText, { color: COLORS.espresso }]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.8}
+          >
+            + Advance Booking
+          </Text>
+        </TouchableOpacity>
+      </View>
+      <View style={[styles.quickRow, { marginTop: -2 }]}>
+        <TouchableOpacity
+          activeOpacity={0.85}
+          onPress={() => onNavigateModule('frontDesk', 'inhouse')}
+          style={[styles.quickBtn, { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: COLORS.border }]}
+        >
+          <LogOut size={15} color={COLORS.espresso} />
+          <Text
+            style={[styles.quickBtnText, { color: COLORS.espresso }]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.8}
+          >
+            In-House & Checkout
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
           activeOpacity={0.85}
           onPress={() => onNavigateModule('invoice')}
-          style={[styles.quickBtn, { backgroundColor: COLORS.espresso }]}
+          style={[styles.quickBtn, { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: COLORS.border }]}
         >
-          <Sparkles size={16} color={COLORS.goldBright} />
+          <Sparkles size={15} color={COLORS.goldDark} />
           <Text
-            style={[styles.quickBtnText, { color: COLORS.goldBright }]}
+            style={[styles.quickBtnText, { color: COLORS.espresso }]}
             numberOfLines={1}
             adjustsFontSizeToFit
             minimumFontScale={0.8}
           >
-            GST & Separate Bills
+            GST & Credit Notes
           </Text>
         </TouchableOpacity>
       </View>
@@ -269,7 +305,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onNavigateModu
                 style={styles.modTile}
               >
                 <View style={styles.modIconBox}>
-                  <IconComp size={16} color={COLORS.goldBright} strokeWidth={2.2} />
+                  <IconComp size={16} color={COLORS.goldDark} strokeWidth={2.2} />
                 </View>
                 <Text style={styles.modTileText} numberOfLines={2}>
                   {mod.label}
@@ -387,30 +423,30 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.bg },
   content: { padding: 14, paddingBottom: 28, gap: 12 },
   heroCard: {
-    backgroundColor: COLORS.espresso,
+    backgroundColor: '#FFFFFF',
     borderRadius: 20,
     padding: 16,
     flexDirection: 'row',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(196, 154, 58, 0.4)',
+    borderWidth: 1.5,
+    borderColor: '#E8D9B5',
   },
   heroOverline: {
     fontSize: 9.5,
     fontWeight: '800',
-    color: COLORS.goldBright,
+    color: COLORS.goldDark,
     letterSpacing: 0.8,
     marginBottom: 4,
   },
   heroTitle: {
     fontSize: 18,
     fontWeight: '800',
-    color: '#FFFFFF',
+    color: COLORS.textPrimary,
     marginBottom: 4,
   },
   heroSub: {
     fontSize: 11.5,
-    color: '#C9BCB0',
+    color: COLORS.textSecondary,
     fontWeight: '600',
   },
   occCircle: {
@@ -418,15 +454,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderRadius: 16,
-    backgroundColor: 'rgba(196, 154, 58, 0.16)',
-    borderWidth: 1,
+    backgroundColor: '#FDF8EE',
+    borderWidth: 1.5,
     borderColor: COLORS.gold,
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
   },
-  occValue: { fontSize: 18, fontWeight: '900', color: COLORS.goldBright },
-  occLabel: { fontSize: 8.5, fontWeight: '800', color: '#D6C9BE', marginTop: 2 },
+  occValue: { fontSize: 18, fontWeight: '900', color: COLORS.goldDark },
+  occLabel: { fontSize: 8.5, fontWeight: '800', color: COLORS.textSecondary, marginTop: 2 },
   quickRow: { flexDirection: 'row', gap: 10 },
   quickBtn: {
     flex: 1,
@@ -514,7 +550,9 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: 8,
-    backgroundColor: COLORS.espresso,
+    backgroundColor: '#FAF0D7',
+    borderWidth: 1,
+    borderColor: '#E8D5A7',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 5,
