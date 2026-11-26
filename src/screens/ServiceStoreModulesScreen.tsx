@@ -141,7 +141,11 @@ export const ServiceStoreModulesScreen: React.FC<Props> = ({ moduleId }) => {
           onChangeSearch={setSearchQuery}
           searchPlaceholder="Search room, staff, item..."
         />
-        <ScrollView contentContainerStyle={styles.scroll}>
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+        >
           {hkTab === 'cleaning' && (
             <>
               {dirtyRooms.length > 0 && (
@@ -492,7 +496,11 @@ export const ServiceStoreModulesScreen: React.FC<Props> = ({ moduleId }) => {
             searchPlaceholder="Search order room, guest..."
           />
         )}
-        <ScrollView contentContainerStyle={styles.scroll}>
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+        >
           {posTab === 'terminal' && (
             <View style={styles.card}>
               <Text style={styles.cardTitle}>Restaurant & Room Service KOT</Text>
@@ -784,7 +792,11 @@ export const ServiceStoreModulesScreen: React.FC<Props> = ({ moduleId }) => {
             { id: 'vendors', label: 'Verified Vendors', count: state.vendors.length },
           ]}
         />
-        <ScrollView contentContainerStyle={styles.scroll}>
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+        >
           {invTab === 'stock' && (
             <>
               <View style={styles.card}>

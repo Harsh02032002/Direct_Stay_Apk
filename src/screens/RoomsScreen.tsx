@@ -9,6 +9,8 @@ import {
   StyleSheet,
   useWindowDimensions,
   Alert,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { BedDouble, Plus } from 'lucide-react-native';
 import { usePms } from '../context/PmsContext';
@@ -308,7 +310,10 @@ export const RoomsScreen: React.FC = () => {
 
       {/* Add Room / Bulk Room Creation Modal */}
       <Modal visible={addModalOpen} transparent animationType="fade">
-        <View style={styles.modalBackdrop}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.modalBackdrop}
+        >
           <View style={[styles.modalCard, { maxHeight: '90%' }]}>
             <Text style={styles.modalTitle}>Add Hotel Rooms (Single &amp; Bulk Range)</Text>
 
@@ -403,7 +408,11 @@ export const RoomsScreen: React.FC = () => {
                 </View>
               </>
             ) : (
-              <ScrollView showsVerticalScrollIndicator={false}>
+              <ScrollView
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="on-drag"
+              >
                 <View style={{ flexDirection: 'row', gap: 8 }}>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.label}>Start No</Text>
@@ -602,7 +611,7 @@ export const RoomsScreen: React.FC = () => {
               </ScrollView>
             )}
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );

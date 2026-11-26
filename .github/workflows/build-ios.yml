@@ -1,0 +1,76 @@
+name: Build DirectStay Admin iOS (Simulator & Prebuild Check)
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  build-ios-simulator:
+    name: Build iOS Native Project (macOS Xcode)
+    runs-on: macos-latest
+
+    env:
+      NODE_ENV: production
+      CI: 1
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install NPM dependencies
+        run: npm install --legacy-peer-deps
+
+      - name: TypeScript Typecheck
+        run: npm run typecheck
+
+      - name: Prebuild iOS Native Project (Expo)
+        run: npx expo prebuild --platform ios --no-install --clean
+
+      - name: Install CocoaPods Dependencies
+        working-directory: ./ios
+        run: pod install --repo-update
+
+      - name: Build iOS App for Simulator (Verifies Full Xcode Compilation)
+        working-directory: ./ios
+        run: |
+          WORKSPACE=$(ls -d *.xcworkspace | head -n 1)
+          SCHEME=$(basename "$WORKSPACE" .xcworkspace)
+          echo "Building workspace=$WORKSPACE scheme=$SCHEME"
+          xcodebuild \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphonesimulator \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Package iOS Simulator App Artifact
+        run: |
+          mkdir -p dist-ios
+          APP_PATH=$(find ios/build/Build/Products/Release-iphonesimulator -name "*.app" -maxdepth 2 | head -n 1)
+          echo "Found app bundle: $APP_PATH"
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" dist-ios/DirectStay-Admin-iOS-Simulator.app.zip
+          ls -lh dist-ios/
+
+      - name: Upload DirectStay Admin iOS Simulator Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DirectStay-Admin-iOS-Simulator
+          path: dist-ios/DirectStay-Admin-iOS-Simulator.app.zip
+          if-no-files-found: error
+          retention-days: 30

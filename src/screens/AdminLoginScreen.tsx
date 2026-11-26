@@ -11,15 +11,18 @@ import {
   ScrollView,
 } from 'react-native';
 import { Building2, Lock, User, Eye, EyeOff, ShieldCheck, AlertTriangle } from 'lucide-react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { COLORS } from '../theme/colors';
 import { LIVE_API_BASE_URL, loginHotelAdminApi } from '../api/directStayApi';
 import { AdminSession } from '../types/pms';
+import { openWhatsAppSafe } from '../utils/iosPlatformHelpers';
 
 interface AdminLoginScreenProps {
   onLoginSuccess: (session: AdminSession) => void;
 }
 
 export const AdminLoginScreen: React.FC<AdminLoginScreenProps> = ({ onLoginSuccess }) => {
+  const insets = useSafeAreaInsets();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPass, setShowPass] = useState(false);
@@ -55,7 +58,17 @@ export const AdminLoginScreen: React.FC<AdminLoginScreenProps> = ({ onLoginSucce
       style={styles.root}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        contentContainerStyle={[
+          styles.scroll,
+          {
+            paddingTop: Math.max(insets.top + 16, 40),
+            paddingBottom: Math.max(insets.bottom + 24, 36),
+          },
+        ]}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
+      >
         {/* Luxury Crest & Badge (Matches DirectStay /admin Web Portal) */}
         <View style={styles.brandBox}>
           <View style={styles.iconCrest}>
@@ -80,8 +93,21 @@ export const AdminLoginScreen: React.FC<AdminLoginScreenProps> = ({ onLoginSucce
                 Account {blockInfo.type}: {blockInfo.hotelName}
               </Text>
               <Text style={styles.blockedSub}>
-                Please renew or activate your property subscription on directstay.online to access the Admin Desk.
+                All your hotel data is safely preserved. Renew or activate your membership on directstay.online or contact our WhatsApp billing desk (+91 7978563771).
               </Text>
+              <TouchableOpacity
+                onPress={() =>
+                  openWhatsAppSafe(
+                    '917978563771',
+                    `Hello DirectStay Billing Team, my property "${blockInfo.hotelName}" is showing "${blockInfo.type}". Please help with renewal.`
+                  )
+                }
+                style={[styles.signInBtn, { backgroundColor: '#16A34A', width: '100%', marginTop: 4 }]}
+              >
+                <Text style={[styles.signInBtnText, { color: '#FFFFFF' }]}>
+                  WhatsApp Billing Support (+91 7978563771)
+                </Text>
+              </TouchableOpacity>
               <TouchableOpacity
                 onPress={() => setBlockInfo(null)}
                 style={styles.secondaryBtn}
@@ -108,6 +134,9 @@ export const AdminLoginScreen: React.FC<AdminLoginScreenProps> = ({ onLoginSucce
                     placeholderTextColor="#7C7067"
                     autoCapitalize="none"
                     autoCorrect={false}
+                    textContentType="username"
+                    autoComplete="username"
+                    returnKeyType="next"
                     style={styles.input}
                   />
                 </View>
@@ -124,6 +153,10 @@ export const AdminLoginScreen: React.FC<AdminLoginScreenProps> = ({ onLoginSucce
                     placeholderTextColor="#7C7067"
                     secureTextEntry={!showPass}
                     autoCapitalize="none"
+                    textContentType="password"
+                    autoComplete="password"
+                    returnKeyType="done"
+                    onSubmitEditing={handleSignIn}
                     style={styles.input}
                   />
                   <TouchableOpacity onPress={() => setShowPass((p) => !p)}>

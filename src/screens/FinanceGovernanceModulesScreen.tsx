@@ -39,6 +39,11 @@ import {
   r2,
 } from '../utils/billCalculator';
 import { buildStayBill } from '../utils/stayBilling';
+import {
+  daysRemainingSafe,
+  openUpiPaymentSafe,
+  openWhatsAppSafe,
+} from '../utils/iosPlatformHelpers';
 
 interface Props {
   moduleId:
@@ -1245,15 +1250,15 @@ export const FinanceGovernanceModulesScreen: React.FC<Props> = ({ moduleId }) =>
     state.systemWebsite?.whatsappNumber || state.systemWebsite?.supportPhone || '917978563771'
   ).replace(/\D/g, '');
   const waDigits = waRaw.length === 10 ? `91${waRaw}` : waRaw || '917978563771';
-  const daysRemaining = (() => {
-    if (!hotelProfile?.subscriptionEndDate) return null;
-    const d = new Date(hotelProfile.subscriptionEndDate);
-    if (Number.isNaN(d.getTime())) return null;
-    return Math.ceil((d.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
-  })();
+  const daysRemaining = daysRemainingSafe(hotelProfile?.subscriptionEndDate);
 
   return (
-    <ScrollView style={styles.root} contentContainerStyle={styles.scroll}>
+    <ScrollView
+      style={styles.root}
+      contentContainerStyle={styles.scroll}
+      keyboardShouldPersistTaps="handled"
+      keyboardDismissMode="on-drag"
+    >
       {/* DirectStay SaaS Membership, Direct UPI Renewal & WhatsApp Support */}
       <View style={[styles.card, { borderColor: COLORS.emerald }]}>
         <Text style={styles.cardTitle}>SaaS Membership &amp; Direct UPI Renewal</Text>
@@ -1307,15 +1312,14 @@ export const FinanceGovernanceModulesScreen: React.FC<Props> = ({ moduleId }) =>
         </View>
 
         <TouchableOpacity
-          onPress={() => {
-            const note = `DirectStay ${chosenPlan.name} - ${hotelProfile?.name || session?.hotelId}`;
-            const upiUrl = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(
-              upiPayee
-            )}&am=${renewTotal.toFixed(2)}&cu=INR&tn=${encodeURIComponent(note.slice(0, 60))}`;
-            Linking.openURL(upiUrl).catch(() =>
-              Alert.alert('UPI Pay', `Pay ₹${renewTotal.toLocaleString('en-IN')} to UPI ID: ${upiId}`)
-            );
-          }}
+          onPress={() =>
+            openUpiPaymentSafe({
+              upiId,
+              payeeName: upiPayee,
+              amount: renewTotal,
+              note: `DirectStay ${chosenPlan.name} - ${hotelProfile?.name || session?.hotelId}`,
+            })
+          }
           style={[styles.primaryBtn, { backgroundColor: '#16A34A', marginBottom: 8 }]}
         >
           <Text style={[styles.primaryBtnText, { color: '#FFFFFF' }]}>
@@ -1371,10 +1375,12 @@ export const FinanceGovernanceModulesScreen: React.FC<Props> = ({ moduleId }) =>
           </TouchableOpacity>
 
           <TouchableOpacity
-            onPress={() => {
-              const msg = `Hello DirectStay Billing, I need renewal help for ${hotelProfile?.name || session?.hotelId} (${chosenPlan.name}).`;
-              Linking.openURL(`https://wa.me/${waDigits}?text=${encodeURIComponent(msg)}`).catch(() => {});
-            }}
+            onPress={() =>
+              openWhatsAppSafe(
+                waDigits,
+                `Hello DirectStay Billing, I need renewal help for ${hotelProfile?.name || session?.hotelId} (${chosenPlan.name}).`
+              )
+            }
             style={[styles.primaryBtn, { flex: 1, backgroundColor: '#059669' }]}
           >
             <Text style={[styles.primaryBtnText, { color: '#FFFFFF' }]}>WhatsApp Support</Text>

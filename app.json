@@ -17,7 +17,26 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.directstay.admin"
+      "bundleIdentifier": "com.directstay.admin",
+      "buildNumber": "5",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "UIViewControllerBasedStatusBarAppearance": true,
+        "LSApplicationQueriesSchemes": [
+          "whatsapp",
+          "upi",
+          "tez",
+          "gpay",
+          "phonepe",
+          "paytmmp",
+          "bhim",
+          "tel",
+          "mailto"
+        ],
+        "NSPhotoLibraryUsageDescription": "DirectStay Admin accesses your photo library to save and share guest tax invoices and GRC registration PDFs.",
+        "NSPhotoLibraryAddUsageDescription": "DirectStay Admin saves generated GST invoices and GRC documents to your device.",
+        "NSCameraUsageDescription": "DirectStay Admin uses the camera only when scanning or uploading hotel and guest verification documents."
+      }
     },
     "android": {
       "package": "com.directstay.admin",

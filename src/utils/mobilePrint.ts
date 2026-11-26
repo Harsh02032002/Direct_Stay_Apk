@@ -62,6 +62,15 @@ export async function printHtml(html: string, title?: string): Promise<void> {
     if (msg.toLowerCase().includes('cancel') || msg.toLowerCase().includes('did not complete')) {
       return;
     }
+    // On iOS / iPad if AirPrint popover fails, gracefully fall back to native PDF Share Sheet
+    if (Platform.OS === 'ios') {
+      try {
+        await sharePdfFromHtml(html, title || 'Save / Print PDF');
+        return;
+      } catch {
+        // Fall through to alert
+      }
+    }
     Alert.alert(title || 'Print Error', msg || 'Unable to open print preview.');
   }
 }

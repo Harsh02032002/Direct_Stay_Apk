@@ -20,6 +20,7 @@ import { usePms } from '../context/PmsContext';
 import { COLORS } from '../theme/colors';
 import { AdminModuleId } from '../types/pms';
 import { ALL_ADMIN_MODULES } from '../components/ModulesDrawerModal';
+import { daysRemainingSafe } from '../utils/iosPlatformHelpers';
 
 interface DashboardScreenProps {
   onNavigateModule: (mod: AdminModuleId) => void;
@@ -70,12 +71,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onNavigateModu
     return invPaid + uninvoicedAdv;
   })();
 
-  const subscriptionDaysLeft = (() => {
-    if (!hotelProfile?.subscriptionEndDate) return null;
-    const end = new Date(hotelProfile.subscriptionEndDate);
-    if (Number.isNaN(end.getTime())) return null;
-    return Math.ceil((end.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
-  })();
+  const subscriptionDaysLeft = daysRemainingSafe(hotelProfile?.subscriptionEndDate);
   const isMembershipExpired =
     hotelProfile?.subscriptionStatus === 'Expired' ||
     (subscriptionDaysLeft !== null && subscriptionDaysLeft < 0);

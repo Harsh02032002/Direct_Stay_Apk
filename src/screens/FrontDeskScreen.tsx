@@ -632,7 +632,11 @@ export const FrontDeskScreen: React.FC = () => {
         />
       )}
 
-      <ScrollView contentContainerStyle={styles.scroll}>
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+      >
         {(subMode === 'advance' || subMode === 'checkin') && (
           <View style={styles.card}>
             <Text style={styles.cardTitle}>

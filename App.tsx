@@ -5,11 +5,13 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   StyleSheet,
-  Linking,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { Menu, Bell, RefreshCw, LogOut, MessageCircle } from 'lucide-react-native';
+import { openWhatsAppSafe } from './src/utils/iosPlatformHelpers';
 import { PmsProvider, usePms } from './src/context/PmsContext';
 import { AdminLoginScreen } from './src/screens/AdminLoginScreen';
 import { DashboardScreen } from './src/screens/DashboardScreen';
@@ -98,14 +100,12 @@ const AdminMobileShell: React.FC = () => {
         <View style={styles.headerActions}>
           {/* DirectStay Live WhatsApp Support (+91 7978563771) */}
           <TouchableOpacity
-            onPress={() => {
-              const rawPhone = String(
-                state.systemWebsite?.whatsappNumber || state.systemWebsite?.supportPhone || '917978563771'
-              ).replace(/\D/g, '');
-              const digits = rawPhone.length === 10 ? `91${rawPhone}` : rawPhone || '917978563771';
-              const msg = `Hello DirectStay Support, I need help from DirectStay Mobile App (${hotelProfile?.name || session.hotelId}).`;
-              Linking.openURL(`https://wa.me/${digits}?text=${encodeURIComponent(msg)}`).catch(() => {});
-            }}
+            onPress={() =>
+              openWhatsAppSafe(
+                state.systemWebsite?.whatsappNumber || state.systemWebsite?.supportPhone,
+                `Hello DirectStay Support, I need help from DirectStay Mobile App (${hotelProfile?.name || session.hotelId}).`
+              )
+            }
             style={[styles.iconBtn, { backgroundColor: '#16A34A' }]}
           >
             <MessageCircle size={16} color="#FFFFFF" />
@@ -136,8 +136,11 @@ const AdminMobileShell: React.FC = () => {
         </View>
       </View>
 
-      {/* Active Screen Content (All 15 /admin Sidebar Modules!) */}
-      <View style={styles.body}>
+      {/* Active Screen Content (KeyboardAvoidingView prevents iOS keyboard overlap on all 15 modules) */}
+      <KeyboardAvoidingView
+        style={styles.body}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
         {activeModule === 'dashboard' && (
           <DashboardScreen onNavigateModule={setActiveModule} />
         )}
@@ -159,7 +162,7 @@ const AdminMobileShell: React.FC = () => {
           activeModule === 'profile') && (
           <FinanceGovernanceModulesScreen moduleId={activeModule} />
         )}
-      </View>
+      </KeyboardAvoidingView>
 
       {/* Bottom Navigation Bar with Safe Area Inset */}
       <BottomTabBar
