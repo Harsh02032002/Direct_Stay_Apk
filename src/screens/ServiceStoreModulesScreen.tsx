@@ -65,7 +65,8 @@ export const ServiceStoreModulesScreen: React.FC<Props> = ({ moduleId }) => {
   const [posRoom, setPosRoom] = useState(state.rooms[0]?.number || '101');
   const [postToRoom, setPostToRoom] = useState(true);
   const [menuName, setMenuName] = useState('');
-  const [menuCat, setMenuCat] = useState('Main Course');
+  const [menuCat, setMenuCat] = useState('');
+  const [menuSubCat, setMenuSubCat] = useState('');
   const [menuPrice, setMenuPrice] = useState('220');
 
   // Inventory state
@@ -438,7 +439,26 @@ export const ServiceStoreModulesScreen: React.FC<Props> = ({ moduleId }) => {
 
   // ---------------- 2. POS TERMINAL & FOOD ----------------
   if (moduleId === 'pos') {
-    const selectedItems = state.posItems
+    const LEGACY_PLACEHOLDER_DISH = /^(prantha dish|beverages special|light special|heavy special)$/i;
+    const cleanPosItems = state.posItems.filter(
+      (it) => it && !LEGACY_PLACEHOLDER_DISH.test(String(it.name || '').trim())
+    );
+    const posCategories = Array.isArray(state.posCategories) ? state.posCategories : [];
+    const categoryNames = Array.from(
+      new Set([
+        ...posCategories.map((c) => c.name).filter(Boolean),
+        ...cleanPosItems.map((it) => it.category).filter(Boolean),
+      ])
+    );
+    const activeCat = menuCat || categoryNames[0] || '';
+    const matchedCatObj = posCategories.find(
+      (c) => String(c.name || '').toLowerCase() === String(activeCat).toLowerCase()
+    );
+    const subCategoryOptions = Array.isArray(matchedCatObj?.subcategories)
+      ? matchedCatObj!.subcategories!.filter(Boolean)
+      : [];
+
+    const selectedItems = cleanPosItems
       .filter((it) => (cart[it.id] || 0) > 0)
       .map((it) => ({
         itemId: it.id,
@@ -456,7 +476,7 @@ export const ServiceStoreModulesScreen: React.FC<Props> = ({ moduleId }) => {
           tabs={[
             { id: 'terminal', label: 'POS Billing / KOT', Icon: UtensilsCrossed },
             { id: 'orders', label: 'Food Orders', count: state.posOrders.length },
-            { id: 'menu', label: 'Menu Master', count: state.posItems.length },
+            { id: 'menu', label: 'Menu Master', count: cleanPosItems.length },
           ]}
         />
         {posTab === 'orders' && (
@@ -501,19 +521,20 @@ export const ServiceStoreModulesScreen: React.FC<Props> = ({ moduleId }) => {
                 </TouchableOpacity>
               </View>
 
-              {state.posItems.length === 0 ? (
+              {cleanPosItems.length === 0 ? (
                 <Text style={styles.emptyText}>
                   No menu items yet. Open "Menu Master" tab above to add dishes.
                 </Text>
               ) : (
-                state.posItems.map((item) => {
+                cleanPosItems.map((item) => {
                   const qty = cart[item.id] || 0;
                   return (
                     <View key={item.id} style={styles.rowItem}>
                       <View style={{ flex: 1 }}>
                         <Text style={styles.rowTitle}>{item.name}</Text>
                         <Text style={styles.rowSub}>
-                          {item.category} • ₹{item.price}
+                          {item.category}
+                          {item.subcategory ? ` • ${item.subcategory}` : ''} • ₹{item.price}
                         </Text>
                       </View>
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -606,9 +627,87 @@ export const ServiceStoreModulesScreen: React.FC<Props> = ({ moduleId }) => {
                 placeholder="Dish Name (e.g. Paneer Tikka)"
                 style={styles.input}
               />
+
+              {/* Dynamic Food Categories from POS Categories Master */}
+              {categoryNames.length > 0 && (
+                <View style={{ marginBottom: 8 }}>
+                  <Text style={[styles.rowSub, { marginBottom: 4, fontWeight: '700' }]}>
+                    Select Category
+                  </Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                    <View style={{ flexDirection: 'row', gap: 6 }}>
+                      {categoryNames.map((catName) => {
+                        const isSel = activeCat === catName;
+                        return (
+                          <TouchableOpacity
+                            key={catName}
+                            onPress={() => {
+                              setMenuCat(catName);
+                              setMenuSubCat('');
+                            }}
+                            style={[
+                              styles.toggleBtn,
+                              { paddingHorizontal: 10, paddingVertical: 6 },
+                              isSel && { backgroundColor: COLORS.espresso },
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.toggleBtnText,
+                                { fontSize: 11 },
+                                isSel && { color: COLORS.goldBright },
+                              ]}
+                            >
+                              {catName}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  </ScrollView>
+                </View>
+              )}
+
+              {/* Dynamic Sub-Categories for Selected Category */}
+              {subCategoryOptions.length > 0 && (
+                <View style={{ marginBottom: 8 }}>
+                  <Text style={[styles.rowSub, { marginBottom: 4, fontWeight: '700' }]}>
+                    Select Sub-Category
+                  </Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                    <View style={{ flexDirection: 'row', gap: 6 }}>
+                      {subCategoryOptions.map((subName) => {
+                        const isSel = menuSubCat === subName;
+                        return (
+                          <TouchableOpacity
+                            key={subName}
+                            onPress={() => setMenuSubCat(isSel ? '' : subName)}
+                            style={[
+                              styles.toggleBtn,
+                              { paddingHorizontal: 10, paddingVertical: 6 },
+                              isSel && { backgroundColor: COLORS.goldDark },
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.toggleBtnText,
+                                { fontSize: 11 },
+                                isSel && { color: '#FFFFFF' },
+                              ]}
+                            >
+                              {subName}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  </ScrollView>
+                </View>
+              )}
+
               <View style={styles.twoCol}>
                 <TextInput
-                  value={menuCat}
+                  value={activeCat}
                   onChangeText={setMenuCat}
                   placeholder="Category"
                   style={[styles.input, { flex: 1.2 }]}
@@ -626,15 +725,37 @@ export const ServiceStoreModulesScreen: React.FC<Props> = ({ moduleId }) => {
                   if (!menuName.trim()) return;
                   await addPosMenuItem({
                     name: menuName,
-                    category: menuCat,
+                    category: activeCat || 'Main Course',
+                    subcategory: menuSubCat || undefined,
                     price: Number(menuPrice) || 150,
                   });
                   setMenuName('');
+                  Alert.alert('Saved', 'Product added to POS Menu Master.');
                 }}
                 style={styles.primaryBtn}
               >
                 <Text style={styles.primaryBtnText}>+ Save Menu Item</Text>
               </TouchableOpacity>
+
+              {cleanPosItems.length > 0 && (
+                <View style={{ marginTop: 12 }}>
+                  <Text style={[styles.rowSub, { fontWeight: '700', marginBottom: 6 }]}>
+                    Active Products ({cleanPosItems.length})
+                  </Text>
+                  {cleanPosItems.map((it) => (
+                    <View key={it.id} style={styles.rowItem}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.rowTitle}>{it.name}</Text>
+                        <Text style={styles.rowSub}>
+                          {it.category}
+                          {it.subcategory ? ` → ${it.subcategory}` : ''}
+                        </Text>
+                      </View>
+                      <Text style={styles.amtText}>₹{it.price}</Text>
+                    </View>
+                  ))}
+                </View>
+              )}
             </View>
           )}
         </ScrollView>

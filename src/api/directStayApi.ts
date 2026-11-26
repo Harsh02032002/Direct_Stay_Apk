@@ -171,6 +171,7 @@ export async function fetchLiveHotelStateApi(
       checkins: byHotel(raw.checkins),
       invoices: byHotel(raw.invoices),
       posItems: byHotel(raw.posItems),
+      posCategories: byHotel(raw.posCategories),
       posOrders: byHotel(raw.posOrders),
       posAdvanceBookings: byHotel(raw.posAdvanceBookings),
       cleaningLogs: byHotel(raw.cleaningLogs),
@@ -192,6 +193,8 @@ export async function fetchLiveHotelStateApi(
       staff: byHotel(raw.staff),
       auditLogs: byHotel(raw.auditLogs),
       notifications: byHotel(raw.notifications),
+      packages: Array.isArray(raw.packages) ? raw.packages : [],
+      systemWebsite: raw.systemWebsite || null,
     };
 
     return { ok: true, data: snapshot };
@@ -206,14 +209,14 @@ export async function syncLiveHotelDataApi(
   apiBaseUrl: string = LIVE_API_BASE_URL
 ): Promise<{ ok: boolean; error?: string }> {
   try {
-    const res = await fetch(
-      `${apiBaseUrl}/api/pms-data?hotelId=${encodeURIComponent(session.hotelId)}`,
-      {
-        method: 'POST',
-        headers: buildAuthHeaders(session),
-        body: JSON.stringify({ hotelId: session.hotelId, data: partialData }),
-      }
-    );
+    const res = await fetch(`${apiBaseUrl}/api/db/sync`, {
+      method: 'POST',
+      headers: {
+        ...buildAuthHeaders(session),
+        'x-target-hotel-id': session.hotelId,
+      },
+      body: JSON.stringify({ data: partialData }),
+    });
     const json = await res.json().catch(() => ({}));
     if (!res.ok || json?.success === false) {
       return { ok: false, error: json?.error || `Sync failed (${res.status})` };
@@ -221,6 +224,60 @@ export async function syncLiveHotelDataApi(
     return { ok: true };
   } catch (err: any) {
     return { ok: false, error: err?.message || 'Network sync error' };
+  }
+}
+
+export async function allocateLiveGrcApi(
+  session: AdminSession,
+  payload: { checkinId?: string; bookingId?: string; prefix?: string },
+  apiBaseUrl: string = LIVE_API_BASE_URL
+): Promise<{ ok: boolean; grcNumber?: string; error?: string }> {
+  try {
+    const res = await fetch(`${apiBaseUrl}/api/grc/allocate`, {
+      method: 'POST',
+      headers: {
+        ...buildAuthHeaders(session),
+        'x-target-hotel-id': session.hotelId,
+      },
+      body: JSON.stringify({
+        hotelId: session.hotelId,
+        checkinId: payload.checkinId,
+        bookingId: payload.bookingId,
+        prefix: payload.prefix || 'GRC',
+      }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (res.ok && json?.success && typeof json.grcNumber === 'string' && json.grcNumber.trim()) {
+      return { ok: true, grcNumber: json.grcNumber.trim() };
+    }
+    return { ok: false, error: json?.error || 'Could not allocate atomic GRC number' };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Network error allocating GRC' };
+  }
+}
+
+export async function submitRenewalRequestApi(
+  session: AdminSession,
+  payload: Record<string, any>,
+  apiBaseUrl: string = LIVE_API_BASE_URL
+): Promise<{ ok: boolean; renewalRequest?: any; error?: string }> {
+  try {
+    const res = await fetch(`${apiBaseUrl}/api/hotels/renewal-request`, {
+      method: 'POST',
+      headers: buildAuthHeaders(session),
+      body: JSON.stringify({
+        ...payload,
+        hotelId: session.hotelId,
+        requestedBy: payload.requestedBy || session.username || 'Hotel Admin',
+      }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || json?.success === false) {
+      return { ok: false, error: json?.error || 'Failed to submit renewal payment reference' };
+    }
+    return { ok: true, renewalRequest: json.renewalRequest };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Network error submitting renewal' };
   }
 }
 

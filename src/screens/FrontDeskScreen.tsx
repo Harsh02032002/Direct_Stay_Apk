@@ -117,6 +117,12 @@ export const FrontDeskScreen: React.FC = () => {
   const [discount, setDiscount] = useState('0');
   const [withGst, setWithGst] = useState<boolean>(true);
   const [advanceAmt, setAdvanceAmt] = useState('0');
+  const [arrivalTimeInput, setArrivalTimeInput] = useState('12:00 PM');
+  const [departureTimeInput, setDepartureTimeInput] = useState('11:00 AM');
+  const [earlyCheckInApplied, setEarlyCheckInApplied] = useState(false);
+  const [earlyCheckInAmt, setEarlyCheckInAmt] = useState(
+    String(hotelProfile?.earlyCheckInFixedRate || hotelProfile?.earlyCheckInFee || 500)
+  );
   const [paymentMethod, setPaymentMethod] = useState('UPI');
   const [selectedServiceIds, setSelectedServiceIds] = useState<string[]>([]);
   const [newSrvName, setNewSrvName] = useState('');
@@ -241,14 +247,7 @@ export const FrontDeskScreen: React.FC = () => {
       (chk
         ? state.bookings.find((x) => x.id === chk.bookingId || x.id === chk.id) || null
         : null);
-    const existingGrcs = [
-      ...state.checkins.map((x) => x.grcNumber),
-      ...state.bookings.map((x) => x.grcNumber),
-    ];
-    const regNo =
-      chk?.grcNumber ||
-      bkg?.grcNumber ||
-      allocateGrcNumber(existingGrcs, billSettings);
+    const regNo = String(chk?.grcNumber || bkg?.grcNumber || '').trim() || 'PENDING-SYNC';
     const rmNo = chk?.roomNumber || bkg?.roomNumber || '';
     const rm = state.rooms.find((r) => r.number === rmNo);
     const grcData = toGrcPrintData({
@@ -452,8 +451,10 @@ export const FrontDeskScreen: React.FC = () => {
       gstNumber,
       roomNumber,
       checkInDate,
-      arrivalTime: nowTimeStr,
+      arrivalTime: arrivalTimeInput.trim() || nowTimeStr,
       checkOutDate,
+      departureTime: departureTimeInput.trim() || '11:00 AM',
+      earlyCheckInCharge: earlyCheckInApplied ? Math.max(0, Number(earlyCheckInAmt) || 0) : 0,
       adults: Number(adults) || 2,
       ratePerNight: Number(ratePerNight) || 2000,
       discount: Number(discount) || 0,
@@ -1021,6 +1022,90 @@ export const FrontDeskScreen: React.FC = () => {
                   />
                 </View>
               </View>
+            )}
+
+            {subMode === 'checkin' && (
+              <>
+                <View style={styles.twoCol}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.inputLabel} numberOfLines={1}>
+                      Arrival Time (12h AM/PM)
+                    </Text>
+                    <TextInput
+                      value={arrivalTimeInput}
+                      onChangeText={setArrivalTimeInput}
+                      placeholder="e.g. 09:30 AM"
+                      placeholderTextColor={COLORS.textMuted}
+                      style={styles.input}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.inputLabel} numberOfLines={1}>
+                      Departure Time (12h)
+                    </Text>
+                    <TextInput
+                      value={departureTimeInput}
+                      onChangeText={setDepartureTimeInput}
+                      placeholder="e.g. 11:00 AM"
+                      placeholderTextColor={COLORS.textMuted}
+                      style={styles.input}
+                    />
+                  </View>
+                </View>
+
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 8,
+                    marginBottom: 10,
+                    backgroundColor: '#FDF8EE',
+                    borderWidth: 1,
+                    borderColor: COLORS.gold,
+                    borderRadius: 12,
+                    padding: 10,
+                  }}
+                >
+                  <TouchableOpacity
+                    onPress={() => setEarlyCheckInApplied((p) => !p)}
+                    style={{
+                      flex: 1,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 8,
+                    }}
+                  >
+                    <View
+                      style={{
+                        width: 18,
+                        height: 18,
+                        borderRadius: 5,
+                        borderWidth: 1.5,
+                        borderColor: earlyCheckInApplied ? COLORS.emerald : COLORS.textSecondary,
+                        backgroundColor: earlyCheckInApplied ? COLORS.emerald : '#FFFFFF',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      {earlyCheckInApplied && (
+                        <Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: '800' }}>✓</Text>
+                      )}
+                    </View>
+                    <Text style={{ fontSize: 12, fontWeight: '700', color: COLORS.espresso }}>
+                      Early Check-In Charge
+                    </Text>
+                  </TouchableOpacity>
+                  {earlyCheckInApplied && (
+                    <TextInput
+                      value={earlyCheckInAmt}
+                      onChangeText={setEarlyCheckInAmt}
+                      keyboardType="numeric"
+                      placeholder="₹500"
+                      style={[styles.input, { width: 92, marginBottom: 0 }]}
+                    />
+                  )}
+                </View>
+              </>
             )}
 
             {/* Available Extra Services */}

@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   StyleSheet,
   Alert,
+  Linking,
 } from 'react-native';
 import {
   Users,
@@ -75,6 +76,7 @@ export const FinanceGovernanceModulesScreen: React.FC<Props> = ({ moduleId }) =>
     addPettyCashEntry,
     addDailyClosing,
     updateHotelProfileSettings,
+    submitMembershipRenewal,
     markAllNotificationsRead,
   } = usePms();
 
@@ -84,6 +86,9 @@ export const FinanceGovernanceModulesScreen: React.FC<Props> = ({ moduleId }) =>
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [renewPlanIdx, setRenewPlanIdx] = useState(0);
+  const [renewUtr, setRenewUtr] = useState('');
+  const [submittingRenewal, setSubmittingRenewal] = useState(false);
 
   // HRM: Strictly ONLY Staff & Salary
   const [hrmTab, setHrmTab] = useState<'staff' | 'salary'>('staff');
@@ -341,12 +346,50 @@ export const FinanceGovernanceModulesScreen: React.FC<Props> = ({ moduleId }) =>
     );
   }
 
-  // ---------------- 2. USER LIST ----------------
+  // ---------------- 2. ALL USERS LIST (Staff Accounts + Guest Customers + Advance Bookings) ----------------
   if (moduleId === 'userList') {
+    const guestMap = new Map<
+      string,
+      { key: string; name: string; mobile: string; room: string; type: 'In-House Guest' | 'Advance Booking' | 'Past Guest'; status: string }
+    >();
+    state.checkins.forEach((c) => {
+      const mobile = String(c.mobile || c.phone || '').trim();
+      const key = mobile || c.id;
+      const isOut = String(c.status || '').toLowerCase().includes('out');
+      guestMap.set(key, {
+        key,
+        name: c.guestName || 'Guest',
+        mobile: mobile || 'N/A',
+        room: c.roomNumber || '-',
+        type: isOut ? 'Past Guest' : 'In-House Guest',
+        status: isOut ? 'Checked-Out' : 'In-House',
+      });
+    });
+    state.bookings.forEach((b) => {
+      const mobile = String(b.mobile || '').trim();
+      const key = mobile || b.id;
+      if (!guestMap.has(key)) {
+        guestMap.set(key, {
+          key,
+          name: b.guestName || b.customerName || 'Guest',
+          mobile: mobile || 'N/A',
+          room: b.roomNumber || '-',
+          type: b.isCompleted ? 'Past Guest' : 'Advance Booking',
+          status: b.status || 'Confirmed',
+        });
+      }
+    });
+    const allGuests = Array.from(guestMap.values());
+    const totalAllUsers = 1 + state.staff.length + allGuests.length;
+
     return (
       <ScrollView style={styles.root} contentContainerStyle={styles.scroll}>
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Hotel Admin & Active Login Credentials</Text>
+          <Text style={styles.cardTitle}>All Hotel Users Directory ({totalAllUsers})</Text>
+          <Text style={[styles.rowSub, { marginBottom: 8 }]}>
+            Unified directory of Hotel Admin, Staff Accounts ({state.staff.length}), and Guest Customers &amp; Advance Bookings ({allGuests.length}).
+          </Text>
+
           <View style={styles.rowItem}>
             <KeyRound size={16} color={COLORS.goldDark} />
             <View style={{ flex: 1 }}>
@@ -355,17 +398,18 @@ export const FinanceGovernanceModulesScreen: React.FC<Props> = ({ moduleId }) =>
               </Text>
               <Text style={styles.rowSub}>Username: {session?.username}</Text>
             </View>
-            <Text style={[styles.amtText, { color: COLORS.emerald }]}>ACTIVE</Text>
+            <Text style={[styles.amtText, { color: COLORS.emerald }]}>ADMIN</Text>
           </View>
+
           {state.staff.map((s) => (
             <View key={s.id} style={styles.rowItem}>
               <Users size={16} color={COLORS.textSecondary} />
               <View style={{ flex: 1 }}>
                 <Text style={styles.rowTitle}>
-                  {s.name} ({s.department || s.role})
+                  {s.name} ({s.department || s.role || 'Staff'})
                 </Text>
                 <Text style={styles.rowSub}>
-                  Username: {s.username} • Pass: {s.plainPassword || '••••••'}
+                  Staff • {s.mobile || 'N/A'} • User: {s.username}
                 </Text>
               </View>
               <Text
@@ -375,7 +419,22 @@ export const FinanceGovernanceModulesScreen: React.FC<Props> = ({ moduleId }) =>
                   color: s.status === 'Active' ? COLORS.emerald : COLORS.rose,
                 }}
               >
-                {s.status}
+                {s.status || 'Active'}
+              </Text>
+            </View>
+          ))}
+
+          {allGuests.map((g) => (
+            <View key={g.key} style={styles.rowItem}>
+              <Users size={16} color={COLORS.goldDark} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.rowTitle}>{g.name}</Text>
+                <Text style={styles.rowSub}>
+                  {g.type} • Room {g.room} • {g.mobile}
+                </Text>
+              </View>
+              <Text style={{ fontSize: 10, fontWeight: '800', color: COLORS.espresso }}>
+                {g.status}
               </Text>
             </View>
           ))}
@@ -861,24 +920,46 @@ export const FinanceGovernanceModulesScreen: React.FC<Props> = ({ moduleId }) =>
 
   // ---------------- 4. AUDITS & REPORTS ----------------
   if (moduleId === 'reports') {
+    const activeNonReversedInvoices = state.invoices.filter(
+      (i) =>
+        i &&
+        i.documentType !== 'CreditNote' &&
+        i.invoiceType !== 'Credit Note' &&
+        i.invoiceStatus !== 'Superseded' &&
+        !i.supersededByCreditNoteId
+    );
     const filteredBkgs = state.bookings.filter(
       (b) =>
         b.status !== 'Cancelled' &&
         matchesQuickDateFilter(b.checkInDate || b.bookingDate, dateFilter, fromDate, toDate)
     );
-    const cashCol = filteredBkgs
-      .filter((b) => b.paymentMethod === 'Cash')
+    const filteredActiveInvs = activeNonReversedInvoices.filter((i) =>
+      matchesQuickDateFilter(i.dateCreated || i.date, dateFilter, fromDate, toDate)
+    );
+    const invoicedBkgSet = new Set(activeNonReversedInvoices.map((i) => i.bookingId).filter(Boolean));
+    const cashInvCol = filteredActiveInvs
+      .filter((i) => classifyPaymentBucket(i.paymentMethod) === 'cash')
+      .reduce((s, i) => s + (Number(i.paidAmount ?? i.advancePaid) || 0), 0);
+    const nonCashInvCol = filteredActiveInvs
+      .filter((i) => classifyPaymentBucket(i.paymentMethod) !== 'cash')
+      .reduce((s, i) => s + (Number(i.paidAmount ?? i.advancePaid) || 0), 0);
+    const cashAdvCol = filteredBkgs
+      .filter((b) => !invoicedBkgSet.has(b.id) && classifyPaymentBucket(b.paymentMethod) === 'cash')
       .reduce((s, b) => s + (Number(b.amountPaid ?? b.advanceAmount) || 0), 0);
-    const upiCol = filteredBkgs
-      .filter((b) => b.paymentMethod !== 'Cash')
+    const nonCashAdvCol = filteredBkgs
+      .filter((b) => !invoicedBkgSet.has(b.id) && classifyPaymentBucket(b.paymentMethod) !== 'cash')
       .reduce((s, b) => s + (Number(b.amountPaid ?? b.advanceAmount) || 0), 0);
-    const gstInvoices = state.invoices.filter(
+    const cashCol = r2(cashInvCol + cashAdvCol);
+    const upiCol = r2(nonCashInvCol + nonCashAdvCol);
+    const gstInvoices = activeNonReversedInvoices.filter(
       (i) =>
         !i.isWithoutGst &&
         Number(i.gstRate || 0) > 0 &&
         matchesQuickDateFilter(i.dateCreated || i.date, dateFilter, fromDate, toDate)
     );
-    const outstandingBkgs = state.bookings.filter((b) => Number(b.dueAmount || 0) > 0);
+    const outstandingBkgs = state.bookings.filter(
+      (b) => b.status !== 'Cancelled' && Number(b.dueAmount || 0) > 0
+    );
 
     return (
       <View style={styles.root}>
@@ -1137,8 +1218,170 @@ export const FinanceGovernanceModulesScreen: React.FC<Props> = ({ moduleId }) =>
     Math.max(1, Math.floor(Number(hotelProfile?.nextGrcSequence || 1)))
   );
 
+  const defaultPlans = [
+    { id: 'pkg-full-pms', name: 'Full PMS (Unlimited Rooms)', priceYearly: 5999, gstRate: 18 },
+    { id: 'pkg-pms-cm-starter', name: 'PMS + Channel Manager Starter (10 Rooms)', priceYearly: 12999, gstRate: 18 },
+    { id: 'pkg-pms-cm-growth', name: 'PMS + Channel Manager Growth', priceYearly: 14999, gstRate: 18 },
+  ];
+  const activePlans =
+    Array.isArray(state.packages) && state.packages.filter((p) => p && p.isActive !== false).length > 0
+      ? state.packages
+          .filter((p) => p && p.isActive !== false)
+          .map((p) => ({
+            id: p.id,
+            name: p.name,
+            priceYearly: Number(p.priceYearly || p.priceMonthly || 5999),
+            gstRate: Number(p.gstRate ?? 18),
+          }))
+      : defaultPlans;
+  const chosenPlan = activePlans[Math.min(renewPlanIdx, activePlans.length - 1)] || defaultPlans[0];
+  const renewBase = chosenPlan.priceYearly;
+  const renewGstRate = chosenPlan.gstRate;
+  const renewGstAmt = Math.round(renewBase * (renewGstRate / 100));
+  const renewTotal = renewBase + renewGstAmt;
+  const upiId = state.systemWebsite?.paymentSettings?.upiId || 'directstay@upi';
+  const upiPayee = state.systemWebsite?.paymentSettings?.upiPayeeName || 'DirectStay Hospitality SaaS';
+  const waRaw = String(
+    state.systemWebsite?.whatsappNumber || state.systemWebsite?.supportPhone || '917978563771'
+  ).replace(/\D/g, '');
+  const waDigits = waRaw.length === 10 ? `91${waRaw}` : waRaw || '917978563771';
+  const daysRemaining = (() => {
+    if (!hotelProfile?.subscriptionEndDate) return null;
+    const d = new Date(hotelProfile.subscriptionEndDate);
+    if (Number.isNaN(d.getTime())) return null;
+    return Math.ceil((d.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+  })();
+
   return (
     <ScrollView style={styles.root} contentContainerStyle={styles.scroll}>
+      {/* DirectStay SaaS Membership, Direct UPI Renewal & WhatsApp Support */}
+      <View style={[styles.card, { borderColor: COLORS.emerald }]}>
+        <Text style={styles.cardTitle}>SaaS Membership &amp; Direct UPI Renewal</Text>
+        <Text style={[styles.rowSub, { marginBottom: 8 }]}>
+          Plan: {hotelProfile?.subscriptionPlan || 'Yearly'} • Valid Until:{' '}
+          {hotelProfile?.subscriptionEndDate || 'Active'}
+          {daysRemaining !== null
+            ? daysRemaining < 0
+              ? ` • ${Math.abs(daysRemaining)}d overdue`
+              : ` • ${daysRemaining}d remaining`
+            : ''}
+        </Text>
+
+        {hotelProfile?.renewalRequest?.status === 'Pending' && (
+          <View style={[styles.previewPill, { backgroundColor: COLORS.amberSoft, marginBottom: 8 }]}>
+            <Text style={[styles.previewPillLabel, { color: COLORS.amber }]}>
+              Pending Verification: {hotelProfile.renewalRequest.requestedPackageName} (UTR:{' '}
+              {hotelProfile.renewalRequest.transactionReference || 'Submitted'})
+            </Text>
+          </View>
+        )}
+
+        <Text style={styles.label}>Select Renewal / Upgrade Plan (18% GST Extra)</Text>
+        <View style={{ gap: 6, marginBottom: 8 }}>
+          {activePlans.map((pl, idx) => {
+            const isSel = idx === renewPlanIdx;
+            const tot = pl.priceYearly + Math.round(pl.priceYearly * (pl.gstRate / 100));
+            return (
+              <TouchableOpacity
+                key={pl.id}
+                onPress={() => setRenewPlanIdx(idx)}
+                style={[
+                  styles.toggleRow,
+                  { marginBottom: 0 },
+                  isSel && { borderColor: COLORS.espresso, backgroundColor: '#FDF8EE' },
+                ]}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.toggleTitle}>{pl.name}</Text>
+                  <Text style={styles.toggleSub}>
+                    ₹{pl.priceYearly.toLocaleString('en-IN')}/yr + {pl.gstRate}% GST = ₹
+                    {tot.toLocaleString('en-IN')}
+                  </Text>
+                </View>
+                <Text style={{ fontSize: 11, fontWeight: '800', color: isSel ? COLORS.espresso : COLORS.textMuted }}>
+                  {isSel ? 'SELECTED ✓' : 'Choose'}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        <TouchableOpacity
+          onPress={() => {
+            const note = `DirectStay ${chosenPlan.name} - ${hotelProfile?.name || session?.hotelId}`;
+            const upiUrl = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(
+              upiPayee
+            )}&am=${renewTotal.toFixed(2)}&cu=INR&tn=${encodeURIComponent(note.slice(0, 60))}`;
+            Linking.openURL(upiUrl).catch(() =>
+              Alert.alert('UPI Pay', `Pay ₹${renewTotal.toLocaleString('en-IN')} to UPI ID: ${upiId}`)
+            );
+          }}
+          style={[styles.primaryBtn, { backgroundColor: '#16A34A', marginBottom: 8 }]}
+        >
+          <Text style={[styles.primaryBtnText, { color: '#FFFFFF' }]}>
+            Pay ₹{renewTotal.toLocaleString('en-IN')} via UPI App ({upiId})
+          </Text>
+        </TouchableOpacity>
+
+        <Text style={styles.label}>UTR / UPI Transaction Reference (Required for Verification)</Text>
+        <TextInput
+          value={renewUtr}
+          onChangeText={setRenewUtr}
+          placeholder="Enter 12-digit UPI UTR after payment"
+          style={styles.input}
+        />
+
+        <View style={styles.twoCol}>
+          <TouchableOpacity
+            disabled={submittingRenewal}
+            onPress={async () => {
+              const clean = renewUtr.trim();
+              if (clean.length < 6) {
+                Alert.alert('UTR Required', 'Enter your valid UPI UTR / reference number (min 6 chars) after payment.');
+                return;
+              }
+              setSubmittingRenewal(true);
+              const res = await submitMembershipRenewal({
+                requestedPackageId: chosenPlan.id,
+                requestedPackageName: chosenPlan.name,
+                requestedPlan: 'Yearly',
+                requestedAmount: renewBase,
+                baseAmount: renewBase,
+                gstRate: renewGstRate,
+                paymentMethod: 'UPI QR / Direct UPI',
+                upiIdUsed: upiId,
+                transactionReference: clean,
+              });
+              setSubmittingRenewal(false);
+              if (res.ok) {
+                setRenewUtr('');
+                Alert.alert(
+                  'Submitted for Verification',
+                  'Your UTR has been queued for billing verification. Your plan & GST Invoice activate once verified.'
+                );
+              } else {
+                Alert.alert('Submission Failed', res.error || 'Could not submit UTR.');
+              }
+            }}
+            style={[styles.primaryBtn, { flex: 1.2 }]}
+          >
+            <Text style={styles.primaryBtnText}>
+              {submittingRenewal ? 'Submitting...' : 'Submit UTR'}
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={() => {
+              const msg = `Hello DirectStay Billing, I need renewal help for ${hotelProfile?.name || session?.hotelId} (${chosenPlan.name}).`;
+              Linking.openURL(`https://wa.me/${waDigits}?text=${encodeURIComponent(msg)}`).catch(() => {});
+            }}
+            style={[styles.primaryBtn, { flex: 1, backgroundColor: '#059669' }]}
+          >
+            <Text style={[styles.primaryBtnText, { color: '#FFFFFF' }]}>WhatsApp Support</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
       {/* GST, Invoice Numbering, GRC & Water Bottle Rate Configuration */}
       <View style={[styles.card, { borderColor: COLORS.gold }]}>
         <Text style={styles.cardTitle}>GST, Invoice, GRC & Billing Rules</Text>

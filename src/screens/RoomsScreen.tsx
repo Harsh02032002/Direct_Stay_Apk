@@ -42,7 +42,7 @@ function statusColors(status: RoomStatus) {
 }
 
 export const RoomsScreen: React.FC = () => {
-  const { state, updateRoomStatusOrRate, addRoomEntity } = usePms();
+  const { state, updateRoomStatusOrRate, addRoomEntity, addBulkRooms } = usePms();
   const { width } = useWindowDimensions();
   const cardWidth = Math.floor((width - 24 - 10) / 2);
 
@@ -53,10 +53,57 @@ export const RoomsScreen: React.FC = () => {
   const [editStatus, setEditStatus] = useState<RoomStatus>('Available');
 
   const [addModalOpen, setAddModalOpen] = useState(false);
+  const [addMode, setAddMode] = useState<'single' | 'bulk'>('single');
   const [newRmNo, setNewRmNo] = useState('');
   const [newRmCat, setNewRmCat] = useState('Deluxe');
   const [newRmFloor, setNewRmFloor] = useState('1st Floor');
   const [newRmRate, setNewRmRate] = useState('2500');
+
+  // Bulk Room Creation / Range Builder State (Every row individually editable!)
+  const [bulkStartNo, setBulkStartNo] = useState('201');
+  const [bulkEndNo, setBulkEndNo] = useState('205');
+  const [bulkDefaultFloor, setBulkDefaultFloor] = useState('2nd Floor');
+  const [bulkDefaultCat, setBulkDefaultCat] = useState('Deluxe');
+  const [bulkDefaultRate, setBulkDefaultRate] = useState('2500');
+  const [bulkRows, setBulkRows] = useState<
+    Array<{ id: string; number: string; floor: string; category: string; rate: string }>
+  >([]);
+
+  const generateBulkPreview = () => {
+    const start = parseInt(bulkStartNo, 10);
+    const end = parseInt(bulkEndNo, 10);
+    if (Number.isNaN(start) || Number.isNaN(end) || end < start) {
+      Alert.alert('Invalid Range', 'Enter a valid Start and End room number (e.g. 201 to 205).');
+      return;
+    }
+    if (end - start + 1 > 50) {
+      Alert.alert('Limit', 'Generate up to 50 rooms per batch.');
+      return;
+    }
+    const existingSet = new Set(
+      state.rooms.map((r) => String(r.number || '').trim().toLowerCase())
+    );
+    const generated: Array<{ id: string; number: string; floor: string; category: string; rate: string }> = [];
+    let skipped = 0;
+    for (let n = start; n <= end; n++) {
+      const rmStr = String(n);
+      if (existingSet.has(rmStr.toLowerCase())) {
+        skipped++;
+        continue;
+      }
+      generated.push({
+        id: `brow-${n}-${Date.now()}`,
+        number: rmStr,
+        floor: bulkDefaultFloor.trim() || '1st Floor',
+        category: bulkDefaultCat.trim() || 'Deluxe',
+        rate: bulkDefaultRate.trim() || '2500',
+      });
+    }
+    setBulkRows(generated);
+    if (skipped > 0) {
+      Alert.alert('Duplicates Skipped', `${skipped} existing room(s) were skipped automatically.`);
+    }
+  };
 
   const filteredRooms = state.rooms.filter((r) =>
     filter === 'All' ? true : r.status === filter
@@ -259,57 +306,301 @@ export const RoomsScreen: React.FC = () => {
         </View>
       </Modal>
 
-      {/* Add Room Modal */}
+      {/* Add Room / Bulk Room Creation Modal */}
       <Modal visible={addModalOpen} transparent animationType="fade">
         <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Add New Hotel Room</Text>
-            <Text style={styles.label}>Room Number *</Text>
-            <TextInput
-              value={newRmNo}
-              onChangeText={setNewRmNo}
-              placeholder="e.g. 204"
-              style={styles.input}
-            />
-            <Text style={styles.label}>Room Category</Text>
-            <TextInput
-              value={newRmCat}
-              onChangeText={setNewRmCat}
-              placeholder="Deluxe / Suite / Standard"
-              style={styles.input}
-            />
-            <Text style={styles.label}>Nightly Tariff (₹)</Text>
-            <TextInput
-              value={newRmRate}
-              onChangeText={setNewRmRate}
-              keyboardType="numeric"
-              style={styles.input}
-            />
-            <View style={styles.modalActions}>
-              <TouchableOpacity onPress={() => setAddModalOpen(false)} style={styles.cancelBtn}>
-                <Text style={styles.cancelBtnText}>Cancel</Text>
+          <View style={[styles.modalCard, { maxHeight: '90%' }]}>
+            <Text style={styles.modalTitle}>Add Hotel Rooms (Single &amp; Bulk Range)</Text>
+
+            <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
+              <TouchableOpacity
+                onPress={() => setAddMode('single')}
+                style={[
+                  styles.filterChip,
+                  { flex: 1, alignItems: 'center' },
+                  addMode === 'single' && styles.filterChipActive,
+                ]}
+              >
+                <Text style={[styles.filterText, addMode === 'single' && styles.filterTextActive]}>
+                  Single Room
+                </Text>
               </TouchableOpacity>
               <TouchableOpacity
-                onPress={async () => {
-                  if (!newRmNo.trim()) {
-                    Alert.alert('Required', 'Enter room number.');
-                    return;
-                  }
-                  await addRoomEntity({
-                    number: newRmNo.trim(),
-                    category: newRmCat.trim() || 'Deluxe',
-                    floor: newRmFloor,
-                    bedType: 'Queen',
-                    rate: Number(newRmRate) || 2000,
-                  });
-                  setNewRmNo('');
-                  setAddModalOpen(false);
-                }}
-                style={styles.saveBtn}
+                onPress={() => setAddMode('bulk')}
+                style={[
+                  styles.filterChip,
+                  { flex: 1, alignItems: 'center' },
+                  addMode === 'bulk' && styles.filterChipActive,
+                ]}
               >
-                <Text style={styles.saveBtnText}>Create Room</Text>
+                <Text style={[styles.filterText, addMode === 'bulk' && styles.filterTextActive]}>
+                  Bulk Room Range
+                </Text>
               </TouchableOpacity>
             </View>
+
+            {addMode === 'single' ? (
+              <>
+                <Text style={styles.label}>Room Number *</Text>
+                <TextInput
+                  value={newRmNo}
+                  onChangeText={setNewRmNo}
+                  placeholder="e.g. 204"
+                  style={styles.input}
+                />
+                <Text style={styles.label}>Floor</Text>
+                <TextInput
+                  value={newRmFloor}
+                  onChangeText={setNewRmFloor}
+                  placeholder="1st Floor"
+                  style={styles.input}
+                />
+                <Text style={styles.label}>Room Category</Text>
+                <TextInput
+                  value={newRmCat}
+                  onChangeText={setNewRmCat}
+                  placeholder="Deluxe / Suite / Standard"
+                  style={styles.input}
+                />
+                <Text style={styles.label}>Nightly Tariff (₹)</Text>
+                <TextInput
+                  value={newRmRate}
+                  onChangeText={setNewRmRate}
+                  keyboardType="numeric"
+                  style={styles.input}
+                />
+                <View style={styles.modalActions}>
+                  <TouchableOpacity onPress={() => setAddModalOpen(false)} style={styles.cancelBtn}>
+                    <Text style={styles.cancelBtnText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={async () => {
+                      if (!newRmNo.trim()) {
+                        Alert.alert('Required', 'Enter room number.');
+                        return;
+                      }
+                      const dup = state.rooms.some(
+                        (r) => String(r.number || '').trim().toLowerCase() === newRmNo.trim().toLowerCase()
+                      );
+                      if (dup) {
+                        Alert.alert('Duplicate Room', `Room ${newRmNo.trim()} already exists.`);
+                        return;
+                      }
+                      await addRoomEntity({
+                        number: newRmNo.trim(),
+                        category: newRmCat.trim() || 'Deluxe',
+                        floor: newRmFloor.trim() || '1st Floor',
+                        bedType: 'Queen',
+                        rate: Number(newRmRate) || 2000,
+                      });
+                      setNewRmNo('');
+                      setAddModalOpen(false);
+                    }}
+                    style={styles.saveBtn}
+                  >
+                    <Text style={styles.saveBtnText}>Create Room</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            ) : (
+              <ScrollView showsVerticalScrollIndicator={false}>
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.label}>Start No</Text>
+                    <TextInput
+                      value={bulkStartNo}
+                      onChangeText={setBulkStartNo}
+                      keyboardType="numeric"
+                      style={styles.input}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.label}>End No</Text>
+                    <TextInput
+                      value={bulkEndNo}
+                      onChangeText={setBulkEndNo}
+                      keyboardType="numeric"
+                      style={styles.input}
+                    />
+                  </View>
+                </View>
+
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.label}>Default Floor</Text>
+                    <TextInput
+                      value={bulkDefaultFloor}
+                      onChangeText={setBulkDefaultFloor}
+                      style={styles.input}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.label}>Default Category</Text>
+                    <TextInput
+                      value={bulkDefaultCat}
+                      onChangeText={setBulkDefaultCat}
+                      style={styles.input}
+                    />
+                  </View>
+                  <View style={{ flex: 0.8 }}>
+                    <Text style={styles.label}>Price ₹</Text>
+                    <TextInput
+                      value={bulkDefaultRate}
+                      onChangeText={setBulkDefaultRate}
+                      keyboardType="numeric"
+                      style={styles.input}
+                    />
+                  </View>
+                </View>
+
+                <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
+                  <TouchableOpacity
+                    onPress={generateBulkPreview}
+                    style={[styles.saveBtn, { flex: 1, paddingVertical: 8 }]}
+                  >
+                    <Text style={styles.saveBtnText}>Generate Preview Rows</Text>
+                  </TouchableOpacity>
+                  {bulkRows.length > 0 && (
+                    <TouchableOpacity
+                      onPress={() =>
+                        setBulkRows((prev) =>
+                          prev.map((row) => ({
+                            ...row,
+                            floor: bulkDefaultFloor.trim() || row.floor,
+                            category: bulkDefaultCat.trim() || row.category,
+                            rate: bulkDefaultRate.trim() || row.rate,
+                          }))
+                        )
+                      }
+                      style={[styles.cancelBtn, { flex: 0.9, paddingVertical: 8 }]}
+                    >
+                      <Text style={styles.cancelBtnText}>Apply Defaults All</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+
+                {bulkRows.map((row, idx) => (
+                  <View
+                    key={row.id}
+                    style={{
+                      borderWidth: 1,
+                      borderColor: COLORS.border,
+                      borderRadius: 10,
+                      padding: 8,
+                      marginBottom: 8,
+                      backgroundColor: COLORS.bg,
+                    }}
+                  >
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                      <Text style={{ fontSize: 11, fontWeight: '800', color: COLORS.espresso }}>
+                        Room Row #{idx + 1}
+                      </Text>
+                      <TouchableOpacity
+                        onPress={() => setBulkRows((prev) => prev.filter((r) => r.id !== row.id))}
+                      >
+                        <Text style={{ fontSize: 11, fontWeight: '800', color: COLORS.rose }}>Remove</Text>
+                      </TouchableOpacity>
+                    </View>
+                    <View style={{ flexDirection: 'row', gap: 6 }}>
+                      <TextInput
+                        value={row.number}
+                        onChangeText={(v) =>
+                          setBulkRows((prev) =>
+                            prev.map((r) => (r.id === row.id ? { ...r, number: v } : r))
+                          )
+                        }
+                        placeholder="No"
+                        style={[styles.input, { flex: 0.7, marginBottom: 0 }]}
+                      />
+                      <TextInput
+                        value={row.floor}
+                        onChangeText={(v) =>
+                          setBulkRows((prev) =>
+                            prev.map((r) => (r.id === row.id ? { ...r, floor: v } : r))
+                          )
+                        }
+                        placeholder="Floor"
+                        style={[styles.input, { flex: 1, marginBottom: 0 }]}
+                      />
+                      <TextInput
+                        value={row.category}
+                        onChangeText={(v) =>
+                          setBulkRows((prev) =>
+                            prev.map((r) => (r.id === row.id ? { ...r, category: v } : r))
+                          )
+                        }
+                        placeholder="Category"
+                        style={[styles.input, { flex: 1, marginBottom: 0 }]}
+                      />
+                      <TextInput
+                        value={row.rate}
+                        onChangeText={(v) =>
+                          setBulkRows((prev) =>
+                            prev.map((r) => (r.id === row.id ? { ...r, rate: v } : r))
+                          )
+                        }
+                        keyboardType="numeric"
+                        placeholder="₹"
+                        style={[styles.input, { flex: 0.8, marginBottom: 0 }]}
+                      />
+                    </View>
+                  </View>
+                ))}
+
+                <TouchableOpacity
+                  onPress={() =>
+                    setBulkRows((prev) => [
+                      ...prev,
+                      {
+                        id: `brow-add-${Date.now()}`,
+                        number: '',
+                        floor: bulkDefaultFloor.trim() || '1st Floor',
+                        category: bulkDefaultCat.trim() || 'Deluxe',
+                        rate: bulkDefaultRate.trim() || '2500',
+                      },
+                    ])
+                  }
+                  style={[styles.cancelBtn, { marginBottom: 10, paddingVertical: 8 }]}
+                >
+                  <Text style={styles.cancelBtnText}>+ Add Custom Room Row</Text>
+                </TouchableOpacity>
+
+                <View style={styles.modalActions}>
+                  <TouchableOpacity onPress={() => setAddModalOpen(false)} style={styles.cancelBtn}>
+                    <Text style={styles.cancelBtnText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={async () => {
+                      if (bulkRows.length === 0) {
+                        Alert.alert('No Rows', 'Generate preview rows or tap + Add Custom Room Row.');
+                        return;
+                      }
+                      const res = await addBulkRooms(
+                        bulkRows.map((r) => ({
+                          number: r.number,
+                          floor: r.floor,
+                          category: r.category,
+                          rate: Number(r.rate) || 2000,
+                        }))
+                      );
+                      Alert.alert(
+                        'Bulk Rooms Created',
+                        `Added ${res.createdCount} room(s)${
+                          res.skippedDuplicates.length > 0
+                            ? `. Skipped duplicate(s): ${res.skippedDuplicates.join(', ')}`
+                            : '.'
+                        }`
+                      );
+                      setBulkRows([]);
+                      setAddModalOpen(false);
+                    }}
+                    style={styles.saveBtn}
+                  >
+                    <Text style={styles.saveBtnText}>Save {bulkRows.length} Room(s)</Text>
+                  </TouchableOpacity>
+                </View>
+              </ScrollView>
+            )}
           </View>
         </View>
       </Modal>

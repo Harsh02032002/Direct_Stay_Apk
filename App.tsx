@@ -5,10 +5,11 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   StyleSheet,
+  Linking,
 } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
-import { Menu, Bell, RefreshCw, LogOut } from 'lucide-react-native';
+import { Menu, Bell, RefreshCw, LogOut, MessageCircle } from 'lucide-react-native';
 import { PmsProvider, usePms } from './src/context/PmsContext';
 import { AdminLoginScreen } from './src/screens/AdminLoginScreen';
 import { DashboardScreen } from './src/screens/DashboardScreen';
@@ -95,6 +96,21 @@ const AdminMobileShell: React.FC = () => {
         </View>
 
         <View style={styles.headerActions}>
+          {/* DirectStay Live WhatsApp Support (+91 7978563771) */}
+          <TouchableOpacity
+            onPress={() => {
+              const rawPhone = String(
+                state.systemWebsite?.whatsappNumber || state.systemWebsite?.supportPhone || '917978563771'
+              ).replace(/\D/g, '');
+              const digits = rawPhone.length === 10 ? `91${rawPhone}` : rawPhone || '917978563771';
+              const msg = `Hello DirectStay Support, I need help from DirectStay Mobile App (${hotelProfile?.name || session.hotelId}).`;
+              Linking.openURL(`https://wa.me/${digits}?text=${encodeURIComponent(msg)}`).catch(() => {});
+            }}
+            style={[styles.iconBtn, { backgroundColor: '#16A34A' }]}
+          >
+            <MessageCircle size={16} color="#FFFFFF" />
+          </TouchableOpacity>
+
           {/* Top Notification Bell (Instant Checkout -> Dirty Room Alert for Housekeeping!) */}
           <TouchableOpacity
             onPress={() => setActiveModule('notifications')}

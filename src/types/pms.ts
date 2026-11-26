@@ -252,7 +252,16 @@ export interface Invoice {
     | 'Stay Checkout Invoice'
     | 'Proforma Invoice'
     | 'Tax Invoice'
-    | 'Bill of Supply';
+    | 'Bill of Supply'
+    | 'Credit Note';
+  documentType?: 'Invoice' | 'CreditNote';
+  creditNoteNumber?: string;
+  originalInvoiceId?: string;
+  originalInvoiceNumber?: string;
+  creditNoteReason?: string;
+  supersededByInvoiceId?: string;
+  supersededByCreditNoteId?: string;
+  supersededAt?: string;
   finalAmount: number;
   totalAmount?: number;
   advancePaid?: number;
@@ -260,8 +269,8 @@ export interface Invoice {
   pendingAmount?: number;
   refundDue?: number;
   isPaid: boolean;
-  paymentStatus?: 'Unpaid' | 'Partially Paid' | 'Paid' | 'Cancelled' | 'Refunded';
-  invoiceStatus?: 'Draft' | 'Generated' | 'Finalized' | 'Cancelled';
+  paymentStatus?: 'Unpaid' | 'Partially Paid' | 'Paid' | 'Cancelled' | 'Refunded' | 'Settled' | 'Reversed';
+  invoiceStatus?: 'Draft' | 'Generated' | 'Finalized' | 'Cancelled' | 'Superseded' | 'Reversed';
   paymentMethod?: string;
   ledgerLines?: BillLedgerLine[];
   amountInWords?: string;
@@ -270,12 +279,21 @@ export interface Invoice {
   date?: string;
 }
 
+export interface PosCategory {
+  id: string;
+  hotelId?: string;
+  name: string;
+  subcategories?: string[];
+}
+
 export interface PosItem {
   id: string;
   hotelId?: string;
   name: string;
   category: string;
+  subcategory?: string;
   price: number;
+  gstRate?: number;
   isVeg?: boolean;
   isAvailable?: boolean;
 }
@@ -566,10 +584,21 @@ export interface HotelProfile {
   isGstEnabled?: boolean;
   earlyCheckInFee?: number;
   lateCheckOutFee?: number;
+  earlyCheckInEnabled?: boolean;
+  earlyCheckInType?: 'hourly' | 'fixed';
+  earlyCheckInHourlyRate?: number;
+  earlyCheckInFixedRate?: number;
   status?: string;
+  packageId?: string;
   subscriptionPlan?: string;
   subscriptionStatus?: string;
+  subscriptionPrice?: number;
+  subscriptionActivatedAt?: string;
+  trialStartDate?: string;
   subscriptionEndDate?: string;
+  renewalRequest?: any;
+  subscriptionPayments?: any[];
+  subscriptionInvoices?: any[];
 }
 
 export interface AdminSession {
@@ -589,6 +618,7 @@ export interface PmsStateSnapshot {
   checkins: GuestCheckIn[];
   invoices: Invoice[];
   posItems: PosItem[];
+  posCategories?: PosCategory[];
   posOrders: PosOrder[];
   posAdvanceBookings: any[];
   cleaningLogs: HousekeepingLog[];
@@ -610,4 +640,6 @@ export interface PmsStateSnapshot {
   staff: StaffMember[];
   auditLogs: AuditLogItem[];
   notifications: AppNotificationItem[];
+  packages?: any[];
+  systemWebsite?: any;
 }

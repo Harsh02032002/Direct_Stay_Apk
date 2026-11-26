@@ -28,11 +28,13 @@ import {
   WaterBottleLog,
 } from '../types/pms';
 import {
+  allocateLiveGrcApi,
   fetchLiveHotelStateApi,
   generateLiveInvoiceApi,
   getStoredAdminSession,
   LIVE_API_BASE_URL,
   logoutHotelAdminApi,
+  submitRenewalRequestApi,
   syncLiveHotelDataApi,
 } from '../api/directStayApi';
 import {
@@ -43,7 +45,6 @@ import {
   r2,
 } from '../utils/billCalculator';
 import {
-  allocateGrcNumber,
   allocateInvoiceNumber,
   buildInvoiceRecord,
   buildStayBill,
@@ -136,6 +137,10 @@ interface PmsContextValue {
     gstRate?: number;
     includeServices: boolean;
   }) => Promise<{ ok: boolean; invoice?: Invoice; error?: string }>;
+  undoCheckout: (
+    invoiceId: string,
+    reason?: string
+  ) => Promise<{ ok: boolean; creditNote?: Invoice; error?: string }>;
   updateRoomStatusOrRate: (roomId: string, status: RoomStatus, newRate?: number) => Promise<void>;
   addRoomEntity: (input: {
     number: string;
@@ -144,6 +149,15 @@ interface PmsContextValue {
     bedType: string;
     rate: number;
   }) => Promise<void>;
+  addBulkRooms: (
+    roomsToAdd: Array<{
+      number: string;
+      category: string;
+      floor: string;
+      bedType?: string;
+      rate: number;
+    }>
+  ) => Promise<{ createdCount: number; skippedDuplicates: string[] }>;
   createPosOrder: (input: {
     roomNumber?: string;
     guestName?: string;
@@ -151,7 +165,12 @@ interface PmsContextValue {
     postToRoom: boolean;
     paymentMethod: string;
   }) => Promise<{ ok: boolean; error?: string }>;
-  addPosMenuItem: (input: { name: string; category: string; price: number }) => Promise<void>;
+  addPosMenuItem: (input: {
+    name: string;
+    category: string;
+    subcategory?: string;
+    price: number;
+  }) => Promise<void>;
   markHousekeepingTaskStatus: (logId: string, status: string, roomNumber: string) => Promise<void>;
   addHousekeepingTask: (input: {
     roomNumber: string;
@@ -240,6 +259,7 @@ interface PmsContextValue {
   }) => Promise<void>;
   toggleStaffStatus: (staffId: string) => Promise<void>;
   updateHotelProfileSettings: (patch: Partial<HotelProfile>) => Promise<void>;
+  submitMembershipRenewal: (payload: Record<string, any>) => Promise<{ ok: boolean; renewalRequest?: any; error?: string }>;
   markAllNotificationsRead: () => Promise<void>;
 }
 
@@ -250,6 +270,7 @@ const EMPTY_STATE: PmsStateSnapshot = {
   checkins: [],
   invoices: [],
   posItems: [],
+  posCategories: [],
   posOrders: [],
   posAdvanceBookings: [],
   cleaningLogs: [],
@@ -496,11 +517,17 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const matchedRoom = state.rooms.find((r) => r.number === input.roomNumber);
     const checkInId = input.linkedBookingId || `CHK-${Date.now().toString().slice(-6)}`;
-    const existingGrcs = [
-      ...state.checkins.map((c) => c.grcNumber),
-      ...state.bookings.map((b) => b.grcNumber),
-    ];
-    const grcNumber = linkedBkg?.grcNumber || allocateGrcNumber(existingGrcs, settings);
+    let grcNumber = String(linkedBkg?.grcNumber || '').trim();
+    if (!grcNumber) {
+      const alloc = await allocateLiveGrcApi(session, {
+        checkinId: checkInId,
+        bookingId: input.linkedBookingId,
+        prefix: settings.grcPrefix,
+      });
+      if (alloc.ok && alloc.grcNumber) {
+        grcNumber = alloc.grcNumber;
+      }
+    }
 
     // Note: earlyCheckInCharge is stored on newCheckin.earlyCheckInCharge (collected directly by folioCollector),
     // so we do NOT duplicate it into extraList.
@@ -1226,6 +1253,47 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     await syncLiveHotelDataApi(session, { rooms: nextRooms });
   };
 
+  const addBulkRooms: PmsContextValue['addBulkRooms'] = async (roomsToAdd) => {
+    if (!session) return { createdCount: 0, skippedDuplicates: [] };
+    const existingNums = new Set(
+      state.rooms.map((r) => String(r.number || '').trim().toLowerCase())
+    );
+    const seenBatch = new Set<string>();
+    const skippedDuplicates: string[] = [];
+    const created: Room[] = [];
+    const baseTs = Date.now();
+
+    roomsToAdd.forEach((item, idx) => {
+      const cleanNum = String(item.number || '').trim();
+      if (!cleanNum) return;
+      const key = cleanNum.toLowerCase();
+      if (existingNums.has(key) || seenBatch.has(key)) {
+        skippedDuplicates.push(cleanNum);
+        return;
+      }
+      seenBatch.add(key);
+      created.push({
+        id: `RM-${baseTs}-${idx}`,
+        hotelId: session.hotelId,
+        number: cleanNum,
+        category: String(item.category || 'Deluxe').trim() || 'Deluxe',
+        floor: String(item.floor || '1st Floor').trim() || '1st Floor',
+        bedType: String(item.bedType || 'Queen').trim() || 'Queen',
+        rate: Math.max(0, Number(item.rate) || 2000),
+        status: 'Available',
+        maxOccupancy: 3,
+        amenities: ['AC', 'Wi-Fi', 'TV'],
+      });
+    });
+
+    if (created.length > 0) {
+      const nextRooms = [...state.rooms, ...created];
+      setState((prev) => ({ ...prev, rooms: nextRooms }));
+      await syncLiveHotelDataApi(session, { rooms: nextRooms });
+    }
+    return { createdCount: created.length, skippedDuplicates };
+  };
+
   const createPosOrder: PmsContextValue['createPosOrder'] = async (input) => {
     if (!session) return { ok: false, error: 'Not authenticated' };
     if (input.items.length === 0) return { ok: false, error: 'Cart is empty' };
@@ -1293,6 +1361,7 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       hotelId: session.hotelId,
       name: input.name.trim(),
       category: input.category.trim() || 'Main Course',
+      subcategory: input.subcategory?.trim() || undefined,
       price: Number(input.price) || 150,
       isVeg: true,
       isAvailable: true,
@@ -1300,6 +1369,145 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const nextItems = [...state.posItems, item];
     setState((prev) => ({ ...prev, posItems: nextItems }));
     await syncLiveHotelDataApi(session, { posItems: nextItems });
+  };
+
+  const undoCheckout: PmsContextValue['undoCheckout'] = async (invoiceId, reason) => {
+    if (!session) return { ok: false, error: 'Not authenticated' };
+    const orig = state.invoices.find((i) => i.id === invoiceId);
+    if (!orig) return { ok: false, error: 'Invoice not found.' };
+    if (orig.documentType === 'CreditNote' || orig.invoiceType === 'Credit Note') {
+      return { ok: false, error: 'Cannot undo a Credit Note.' };
+    }
+    if (orig.invoiceStatus === 'Superseded' || orig.supersededByCreditNoteId) {
+      return { ok: false, error: 'Checkout was already reversed for this invoice.' };
+    }
+
+    const nowIso = new Date().toISOString();
+    const todayStr = nowIso.slice(0, 10);
+    const nowDate = new Date();
+    const fyStart = nowDate.getMonth() >= 3 ? nowDate.getFullYear() : nowDate.getFullYear() - 1;
+    const fyLabel = `${fyStart}-${String((fyStart + 1) % 100).padStart(2, '0')}`;
+    const existingCnCount = state.invoices.filter(
+      (i) => i.documentType === 'CreditNote' || i.invoiceType === 'Credit Note'
+    ).length;
+    const cnNumber = `CN/${existingCnCount + 1}/${fyLabel}`;
+    const cnId = `CN-${Date.now().toString().slice(-6)}`;
+    const origTotal = r2(orig.finalAmount ?? orig.totalAmount ?? 0);
+
+    const creditNote: Invoice = {
+      ...orig,
+      id: cnId,
+      invoiceNumber: cnNumber,
+      creditNoteNumber: cnNumber,
+      documentType: 'CreditNote',
+      invoiceType: 'Credit Note',
+      originalInvoiceId: orig.id,
+      originalInvoiceNumber: orig.invoiceNumber,
+      creditNoteReason: reason?.trim() || 'Undo Checkout — Stay reopened to In-House',
+      roomCharges: -Math.abs(r2(orig.roomCharges)),
+      foodCharges: -Math.abs(r2(orig.foodCharges)),
+      waterCharges: -Math.abs(r2(orig.waterCharges)),
+      otherCharges: -Math.abs(r2(orig.otherCharges)),
+      subtotal: -Math.abs(r2(orig.subtotal)),
+      taxableAmount: -Math.abs(r2(orig.taxableAmount ?? orig.subtotal)),
+      gst: -Math.abs(r2(orig.gst)),
+      cgst: -Math.abs(r2(orig.cgst ?? r2(orig.gst) / 2)),
+      sgst: -Math.abs(r2(orig.sgst ?? r2(orig.gst) / 2)),
+      taxAmount: -Math.abs(r2(orig.taxAmount ?? orig.gst)),
+      finalAmount: -Math.abs(origTotal),
+      totalAmount: -Math.abs(origTotal),
+      advancePaid: 0,
+      paidAmount: 0,
+      pendingAmount: 0,
+      refundDue: 0,
+      isPaid: true,
+      paymentStatus: 'Reversed',
+      invoiceStatus: 'Finalized',
+      dateCreated: todayStr,
+      date: todayStr,
+    };
+
+    const nextInvoices: Invoice[] = [
+      creditNote,
+      ...state.invoices.map((inv) =>
+        inv.id === orig.id
+          ? {
+              ...inv,
+              invoiceStatus: 'Superseded' as const,
+              paymentStatus: 'Settled' as const,
+              pendingAmount: 0,
+              isPaid: true,
+              supersededByCreditNoteId: cnId,
+              supersededAt: nowIso,
+            }
+          : inv
+      ),
+    ];
+
+    const targetRooms =
+      Array.isArray(orig.roomNumbers) && orig.roomNumbers.length > 0
+        ? orig.roomNumbers
+        : String(orig.roomNumber || '')
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean);
+
+    const nextBookings = state.bookings.map((b) =>
+      b.id === orig.bookingId
+        ? { ...b, isCheckedIn: true, isCompleted: false, status: 'Checked-In' }
+        : b
+    );
+    const nextCheckins = state.checkins.map((c) =>
+      c.id === orig.checkInId || c.bookingId === orig.bookingId
+        ? { ...c, isCheckedOut: false, status: 'Checked-In' }
+        : c
+    );
+    const nextRooms = state.rooms.map((r) =>
+      targetRooms.includes(r.number) ? { ...r, status: 'Occupied' as RoomStatus } : r
+    );
+    const nextAudit = [
+      {
+        id: `AUD-${Date.now().toString().slice(-6)}`,
+        hotelId: session.hotelId,
+        action: 'Undo Checkout & Credit Note',
+        performedBy: session.username || 'Admin',
+        details: `Issued ${cnNumber} reversing ${orig.invoiceNumber}; reopened Room ${targetRooms.join(', ')} to In-House.`,
+        dateTime: nowIso,
+      },
+      ...state.auditLogs,
+    ];
+
+    setState((prev) => ({
+      ...prev,
+      invoices: nextInvoices,
+      bookings: nextBookings,
+      checkins: nextCheckins,
+      rooms: nextRooms,
+      auditLogs: nextAudit,
+    }));
+
+    const res = await syncLiveHotelDataApi(session, {
+      invoices: nextInvoices,
+      bookings: nextBookings,
+      checkins: nextCheckins,
+      rooms: nextRooms,
+      auditLogs: nextAudit,
+    });
+    return res.ok ? { ok: true, creditNote } : { ok: false, error: res.error };
+  };
+
+  const submitMembershipRenewal: PmsContextValue['submitMembershipRenewal'] = async (payload) => {
+    if (!session) return { ok: false, error: 'Not authenticated' };
+    const res = await submitRenewalRequestApi(session, payload);
+    if (res.ok && res.renewalRequest) {
+      setState((prev) => ({
+        ...prev,
+        hotels: prev.hotels.map((h) =>
+          h.id === session.hotelId ? { ...h, renewalRequest: res.renewalRequest } : h
+        ),
+      }));
+    }
+    return res;
   };
 
   const markHousekeepingTaskStatus: PmsContextValue['markHousekeepingTaskStatus'] = async (
@@ -1730,8 +1938,10 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         performCheckIn,
         performCheckout,
         generateSeparateOrNewInvoice,
+        undoCheckout,
         updateRoomStatusOrRate,
         addRoomEntity,
+        addBulkRooms,
         createPosOrder,
         addPosMenuItem,
         markHousekeepingTaskStatus,
@@ -1753,6 +1963,7 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addStaffMember,
         toggleStaffStatus,
         updateHotelProfileSettings,
+        submitMembershipRenewal,
         markAllNotificationsRead,
       }}
     >

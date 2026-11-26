@@ -44,6 +44,8 @@ export interface BillCharge {
   nights?: number;
   /** De-duplication key, e.g. "pos:ORD-1", "water:WB-1", "laundry:LND-1". */
   sourceKey?: string;
+  /** True when a KOT / food order was explicitly marked "Exclude GST" at KOT printing time. */
+  gstExempt?: boolean;
 }
 
 export interface BillPayment {
@@ -105,9 +107,16 @@ export interface BillResult {
   chargeLines: BillLedgerLine[];
   taxRows: BillTaxRow[];
   totalsByKind: Record<BillChargeKind, number>;
+  /** Chronological date-wise & mode-wise payment entries included in this bill. */
+  paymentItems?: BillPayment[];
+  /** Aggregated mode-wise payment totals for quick bill reconciliation. */
+  paymentsByMode?: Array<{ method: string; amount: number; count: number }>;
   /** Sum of pre-tax charges before discount. */
   subtotal: number;
   discount: number;
+  /** Net pre-tax charges after discount (includes GST-exempt items such as Damage Fines). */
+  netSubtotal?: number;
+  /** Authoritative taxable base subject to GST (derived from taxRows when GST is enabled; excludes GST-exempt items like Damage Fines). */
   taxableAmount: number;
   cgst: number;
   sgst: number;
@@ -297,7 +306,7 @@ export function calculateBill(input: BillInput): BillResult {
   // 1. Pre-tax value per charge
   type Priced = BillCharge & { preTax: number; gstRate: number };
   const priced: Priced[] = charges.map((c) => {
-    const rate = gstRateFor(c.kind, gstEnabled, s);
+    const rate = c.gstExempt ? 0 : gstRateFor(c.kind, gstEnabled, s);
     const amt = r2(c.amount);
     const inclusive = s.roomRateIncludesGst && ROOM_KINDS.includes(c.kind) && rate > 0;
     const preTax = inclusive ? r2(amt / (1 + rate / 100)) : amt;
@@ -362,13 +371,32 @@ export function calculateBill(input: BillInput): BillResult {
     taxRows.push({ rate, taxable, cgst, sgst, tax });
   });
 
-  const taxableAmount = r2(subtotal - discount);
+  const netSubtotal = r2(subtotal - discount);
+  const taxableAmount =
+    gstEnabled && taxRows.length > 0
+      ? r2(taxRows.reduce((x, t) => x + t.taxable, 0))
+      : gstEnabled
+      ? 0
+      : netSubtotal;
   const cgst = r2(taxRows.reduce((x, t) => x + t.cgst, 0));
   const sgst = r2(taxRows.reduce((x, t) => x + t.sgst, 0));
   const totalTax = r2(cgst + sgst);
-  const grandTotal = r2(taxableAmount + totalTax);
+  const grandTotal = r2(netSubtotal + totalTax);
 
-  const payments = (input.payments || []).filter((p) => p && num(p.amount) !== 0);
+  const payments = (input.payments || [])
+    .filter((p) => p && num(p.amount) !== 0)
+    .slice()
+    .sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
+  const modeMap = new Map<string, { method: string; amount: number; count: number }>();
+  payments.forEach((p) => {
+    const mLabel = String(p.method || 'Cash').trim() || 'Cash';
+    const key = mLabel.toUpperCase();
+    const cur = modeMap.get(key) || { method: mLabel, amount: 0, count: 0 };
+    cur.amount = r2(cur.amount + num(p.amount));
+    cur.count += 1;
+    modeMap.set(key, cur);
+  });
+  const paymentsByMode = Array.from(modeMap.values());
   const receipts = r2(payments.reduce((x, p) => x + num(p.amount), 0));
   const diff = r2(grandTotal - receipts);
   const balance = Math.max(0, diff);
@@ -411,11 +439,19 @@ export function calculateBill(input: BillInput): BillResult {
   });
   payments.forEach((p) => {
     const amt = r2(p.amount);
+    const modeStr = p.method ? String(p.method).trim() : 'Cash';
+    const metaParts = [
+      p.reference ? `Ref: ${p.reference}` : '',
+      p.note && p.note !== 'Payment Received' ? p.note : '',
+    ].filter(Boolean);
     lines.push({
       type: 'receipt',
       dateLabel: formatDateLabel(p.date),
       roomNumber: firstRoom,
-      description: amt < 0 ? `Refund${p.method ? ` (${p.method})` : ''}` : `Receipt${p.method ? `\n${p.method}` : ''}`,
+      description:
+        amt < 0
+          ? `Refund (${modeStr})${metaParts.length ? ` — ${metaParts.join(' • ')}` : ''}`
+          : `Receipt — ${modeStr}${metaParts.length ? `\n${metaParts.join(' • ')}` : ''}`,
       sac: '',
       charges: 0,
       receipts: amt,
@@ -429,8 +465,11 @@ export function calculateBill(input: BillInput): BillResult {
     chargeLines,
     taxRows,
     totalsByKind,
+    paymentItems: payments,
+    paymentsByMode,
     subtotal,
     discount,
+    netSubtotal,
     taxableAmount,
     cgst,
     sgst,
@@ -522,8 +561,9 @@ export function formatGrcNumber(prefix: string, seq: number, date: Date = new Da
 export function nextInvoiceSequence(existingNumbers: Array<string | undefined>, settingsNext: number): number {
   let maxSeq = 0;
   existingNumbers.forEach((n) => {
-    const s = String(n || '');
-    const slash = s.match(/\/(\d+)\/\d{4}-\d{2}$/);
+    const s = String(n || '').trim();
+    if (!s) return;
+    const slash = s.match(/\/(\d+)\/\d{2,4}(?:-\d{2})?$/);
     const tail = s.match(/(\d+)$/);
     const v = slash ? +slash[1] : tail ? +tail[1] : 0;
     if (v > maxSeq && v < 100000000) maxSeq = v;

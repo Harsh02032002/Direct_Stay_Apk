@@ -74,7 +74,14 @@ function kindFromLabel(category?: string, sourceType?: string, serviceType?: str
   const d = String(desc || '').toLowerCase();
   if (st.includes('pos') || c === 'food' || sv.includes('room service') || sv.includes('food') || d.startsWith('pos ')) return 'food';
   if (st.includes('water') || c.includes('water') || sv.includes('water') || d.includes('water bottle')) return 'water';
-  if (st.includes('laundry') || c === 'laundry' || sv.includes('laundry')) return 'laundry';
+  if (
+    st.includes('laundry') ||
+    c === 'laundry' ||
+    sv.includes('laundry') ||
+    d.includes('laundry') ||
+    d.includes('dry clean') ||
+    /\biron(ing)?\b/.test(d)
+  ) return 'laundry';
   if (c === 'damage' || sv.includes('damage') || sv.includes('fine') || d.includes('fine')) return 'fine';
   if (c.includes('late') || d.includes('late check')) return 'late_checkout';
   if (d.includes('early check')) return 'early_checkin';
@@ -84,11 +91,14 @@ function kindFromLabel(category?: string, sourceType?: string, serviceType?: str
 
 /** POS order pre-tax amount (food enters the bill PRE-TAX; GST is applied once by the bill). */
 function posPreTax(po: AnyRec, foodRate: number): number {
+  const gross = n(po.grandTotal ?? po.totalAmount);
+  const tax = n(po.taxAmount ?? po.gstAmount);
+  if (po.settlement && gross > 0) {
+    return tax > 0 ? r2(Math.max(0, gross - tax)) : foodRate > 0 ? r2(gross / (1 + foodRate / 100)) : r2(gross);
+  }
   const sub = n(po.subtotal);
   const disc = n(po.discount);
   if (sub > 0) return r2(Math.max(0, sub - disc));
-  const gross = n(po.grandTotal ?? po.totalAmount);
-  const tax = n(po.taxAmount ?? po.gstAmount);
   if (gross > 0 && tax > 0) return r2(gross - tax);
   return foodRate > 0 ? r2(gross / (1 + foodRate / 100)) : r2(gross);
 }
@@ -133,18 +143,48 @@ export function collectStayCharges(input: CollectStayInput): CollectStayResult {
     if (n(ch.amount) > 0) charges.push({ ...ch, amount: r2(ch.amount) });
   };
 
-  // ---------------------------------------------------------------- 1. ROOM CHARGES
+  // ---------------------------------------------------------------- 1. ROOM CHARGES & EXTRA PERSON / EXTRA BED
   const reqs: AnyRec[] = Array.isArray(b?.requirements) ? b!.requirements : [];
   if (c && Array.isArray(c.bookedRooms) && c.bookedRooms.length > 0 && c.isGroupCheckIn) {
+    let groupRoomLevelExtraBedSum = 0;
+    let groupRoomLevelExtraPaxSum = 0;
     c.bookedRooms.forEach((br: AnyRec, i: number) => {
       const rate = n(br.rate) || roomRateOf(String(br.roomNumber));
       push({ id: `room-${br.roomNumber || i}`, kind: 'room', description: 'Room Charges', amount: rate * nights, rate, nights, roomNumber: String(br.roomNumber || primaryRoom), sourceKey: `room:${br.roomNumber || i}` });
       if (br.hasExtraBed) {
-        const cnt = n(br.extraBedCount) || 1;
+        const cnt = Math.max(1, n(br.extraBedCount) || 1);
         const er = n(br.extraBedRate);
-        push({ id: `xbed-${br.roomNumber || i}`, kind: 'extra_bed', description: `Extra Bed (${cnt} x ${er} x ${nights}N)`, amount: cnt * er * nights, roomNumber: String(br.roomNumber || primaryRoom), sourceKey: `xbed:${br.roomNumber || i}` });
+        const ebNights = Math.max(1, n(br.extraBedNights) || nights);
+        const ebAmt = cnt * er * ebNights;
+        groupRoomLevelExtraBedSum += ebAmt;
+        push({ id: `xbed-${br.roomNumber || i}`, kind: 'extra_bed', description: `Extra Bed / Mattress (${cnt} × ₹${er} × ${ebNights}N)`, amount: ebAmt, roomNumber: String(br.roomNumber || primaryRoom), sourceKey: `xbed:${br.roomNumber || i}` });
+      }
+      if (br.hasExtraPerson || n(br.extraPersonChargeApplied) > 0) {
+        const epAmt = n(br.extraPersonChargeApplied) > 0
+          ? n(br.extraPersonChargeApplied)
+          : Math.max(1, n(br.extraPersonCount) || 1) * n(br.extraPersonRate) * Math.max(1, n(br.extraPersonNights) || nights);
+        if (epAmt > 0 && n(c.extraPersonChargeApplied) <= 0) {
+          groupRoomLevelExtraPaxSum += epAmt;
+          push({ id: `xpax-${br.roomNumber || i}`, kind: 'extra_person', description: 'Extra Person Charges', amount: epAmt, roomNumber: String(br.roomNumber || primaryRoom), sourceKey: `xpax:${br.roomNumber || i}` });
+        }
       }
     });
+    // Top-level group Extra Bed / Extra Person (only if not already emitted per room — prevents duplicate charges!)
+    if (groupRoomLevelExtraBedSum <= 0 && c.hasExtraBed) {
+      const cnt = Math.max(1, n(c.extraBedCount) || 1);
+      const er = n(c.extraBedRate);
+      const ebNights = Math.max(1, n(c.extraBedNights) || nights);
+      push({ id: `xbed-${c.id}`, kind: 'extra_bed', description: `Extra Bed / Mattress (${cnt} × ₹${er} × ${ebNights}N)`, amount: cnt * er * ebNights, roomNumber: primaryRoom, sourceKey: `xbed:${c.id}` });
+    }
+    if (groupRoomLevelExtraPaxSum <= 0 && n(c.extraPersonChargeApplied) > 0) {
+      const epCnt = n(c.extraPersonCount);
+      const epRate = n(c.extraPersonRate);
+      const epNights = n(c.extraPersonNights) || nights;
+      const desc = epCnt > 0 && epRate > 0
+        ? `Extra Person (${epCnt} × ₹${epRate} × ${epNights}N)`
+        : 'Extra Person Charges';
+      push({ id: `xpax-${c.id}`, kind: 'extra_person', description: desc, amount: n(c.extraPersonChargeApplied), roomNumber: primaryRoom, sourceKey: `xpax:${c.id}` });
+    }
   } else if (c && n(c.roomRate) > 0) {
     const rate = n(c.roomRate);
     push({ id: `room-${primaryRoom}`, kind: 'room', description: 'Room Charges', amount: rate * nights, rate, nights, roomNumber: primaryRoom, sourceKey: `room:${primaryRoom}` });
@@ -159,34 +199,93 @@ export function collectStayCharges(input: CollectStayInput): CollectStayResult {
         push({ id: `room-${rn || i}`, kind: 'room', description: 'Room Charges', amount: rate * nights, rate, nights, roomNumber: String(rn || primaryRoom), sourceKey: `room:${rn || i}` });
       });
     });
-    const recorded = n(b?.roomSubtotal);
-    if (recorded > r2(base) + 0.5) {
-      push({ id: `xpax-${b?.id}`, kind: 'extra_person', description: 'Extra Person / Extra Bed Charges', amount: recorded - base, roomNumber: primaryRoom, sourceKey: `xpax:${b?.id}` });
+    const hasExplicitExtras = Boolean(b?.hasExtraBed) || Boolean(b?.hasExtraPerson) || n(b?.extraPersonChargeApplied) > 0;
+    if (hasExplicitExtras) {
+      if (b?.hasExtraPerson || n(b?.extraPersonChargeApplied) > 0) {
+        const epCnt = Math.max(1, n(b?.extraPersonCount) || 1);
+        const epRate = n(b?.extraPersonRate);
+        const epNights = Math.max(1, n(b?.extraPersonNights) || nights);
+        const epAmt = n(b?.extraPersonChargeApplied) > 0 ? n(b?.extraPersonChargeApplied) : epCnt * epRate * epNights;
+        push({ id: `xpax-${b?.id}`, kind: 'extra_person', description: epRate > 0 ? `Extra Person (${epCnt} × ₹${epRate} × ${epNights}N)` : 'Extra Person Charges', amount: epAmt, roomNumber: primaryRoom, sourceKey: `xpax:${b?.id}` });
+      }
+      if (b?.hasExtraBed) {
+        const ebCnt = Math.max(1, n(b?.extraBedCount) || 1);
+        const ebRate = n(b?.extraBedRate);
+        const ebNights = Math.max(1, n(b?.extraBedNights) || nights);
+        const ebAmt = n(b?.extraBedTotal) > 0 ? n(b?.extraBedTotal) : ebCnt * ebRate * ebNights;
+        push({ id: `xbed-${b?.id}`, kind: 'extra_bed', description: ebRate > 0 ? `Extra Bed / Mattress (${ebCnt} × ₹${ebRate} × ${ebNights}N)` : 'Extra Bed Charges', amount: ebAmt, roomNumber: primaryRoom, sourceKey: `xbed:${b?.id}` });
+      }
+    } else {
+      const recorded = n(b?.roomSubtotal);
+      if (recorded > r2(base) + 0.5) {
+        push({ id: `xpax-${b?.id}`, kind: 'extra_person', description: 'Extra Person / Extra Bed Charges', amount: recorded - base, roomNumber: primaryRoom, sourceKey: `xpax:${b?.id}` });
+      }
     }
   } else if (b && Array.isArray(b.bookedRooms) && b.bookedRooms.length > 0) {
+    let brExtraBedEmitted = 0;
     b.bookedRooms.forEach((br: AnyRec, i: number) => {
       const rate = n(br.rate) || roomRateOf(String(br.roomNumber));
       push({ id: `room-${br.roomNumber || i}`, kind: 'room', description: 'Room Charges', amount: rate * nights, rate, nights, roomNumber: String(br.roomNumber || primaryRoom), sourceKey: `room:${br.roomNumber || i}` });
+      if (br.hasExtraBed) {
+        const cnt = Math.max(1, n(br.extraBedCount) || 1);
+        const er = n(br.extraBedRate);
+        const ebNights = Math.max(1, n(br.extraBedNights) || nights);
+        const ebAmt = cnt * er * ebNights;
+        brExtraBedEmitted += ebAmt;
+        push({ id: `xbed-${br.roomNumber || i}`, kind: 'extra_bed', description: `Extra Bed / Mattress (${cnt} × ₹${er} × ${ebNights}N)`, amount: ebAmt, roomNumber: String(br.roomNumber || primaryRoom), sourceKey: `xbed:${br.roomNumber || i}` });
+      }
     });
+    if (brExtraBedEmitted <= 0 && b.hasExtraBed) {
+      const cnt = Math.max(1, n(b.extraBedCount) || 1);
+      const er = n(b.extraBedRate);
+      const ebNights = Math.max(1, n(b.extraBedNights) || nights);
+      push({ id: `xbed-${b.id}`, kind: 'extra_bed', description: `Extra Bed / Mattress (${cnt} × ₹${er} × ${ebNights}N)`, amount: cnt * er * ebNights, roomNumber: primaryRoom, sourceKey: `xbed:${primaryRoom}` });
+    }
+    if (b.hasExtraPerson || n(b.extraPersonChargeApplied) > 0) {
+      const epCnt = n(b.extraPersonCount);
+      const epRate = n(b.extraPersonRate);
+      const epNights = n(b.extraPersonNights) || nights;
+      const epAmt = n(b.extraPersonChargeApplied) > 0 ? n(b.extraPersonChargeApplied) : Math.max(1, epCnt || 1) * epRate * epNights;
+      push({ id: `xpax-${b.id}`, kind: 'extra_person', description: epCnt > 0 && epRate > 0 ? `Extra Person (${epCnt} × ₹${epRate} × ${epNights}N)` : 'Extra Person Charges', amount: epAmt, roomNumber: primaryRoom, sourceKey: `xpax:${b.id}` });
+    }
   } else if (b) {
     const total = n(b.roomSubtotal ?? b.bookingAmount) || roomRateOf(primaryRoom) * nights;
     push({ id: `room-${primaryRoom}`, kind: 'room', description: 'Room Charges', amount: total, rate: r2(total / nights), nights, roomNumber: primaryRoom, sourceKey: `room:${primaryRoom}` });
   }
 
-  // Extra bed / extra person / early check-in (single-room check-in or legacy booking)
+  // Extra bed / extra person / early check-in (single-room check-in or pre-arrival single booking without bookedRooms)
   if (c && !c.isGroupCheckIn) {
     if (c.hasExtraBed) {
-      const cnt = n(c.extraBedCount) || 1;
+      const cnt = Math.max(1, n(c.extraBedCount) || 1);
       const er = n(c.extraBedRate);
-      push({ id: `xbed-${c.id}`, kind: 'extra_bed', description: `Extra Bed (${cnt} x ${er} x ${nights}N)`, amount: cnt * er * nights, roomNumber: primaryRoom, sourceKey: `xbed:${primaryRoom}` });
+      const ebNights = Math.max(1, n(c.extraBedNights) || nights);
+      push({ id: `xbed-${c.id}`, kind: 'extra_bed', description: `Extra Bed / Mattress (${cnt} × ₹${er} × ${ebNights}N)`, amount: cnt * er * ebNights, roomNumber: primaryRoom, sourceKey: `xbed:${primaryRoom}` });
     }
-    if (n(c.extraPersonChargeApplied) > 0) {
-      push({ id: `xpax-${c.id}`, kind: 'extra_person', description: 'Extra Person Charges', amount: n(c.extraPersonChargeApplied), roomNumber: primaryRoom, sourceKey: `xpax:${c.id}` });
+    if (c.hasExtraPerson !== false && n(c.extraPersonChargeApplied) > 0) {
+      const epCnt = n(c.extraPersonCount);
+      const epRate = n(c.extraPersonRate);
+      const epNights = n(c.extraPersonNights) || nights;
+      const desc = epCnt > 0 && epRate > 0
+        ? `Extra Person (${epCnt} × ₹${epRate} × ${epNights}N)`
+        : 'Extra Person Charges';
+      push({ id: `xpax-${c.id}`, kind: 'extra_person', description: desc, amount: n(c.extraPersonChargeApplied), roomNumber: primaryRoom, sourceKey: `xpax:${c.id}` });
     }
-  } else if (!c && b && b.hasExtraBed && reqs.length === 0) {
-    const cnt = n(b.extraBedCount) || 1;
-    const er = n(b.extraBedRate);
-    push({ id: `xbed-${b.id}`, kind: 'extra_bed', description: `Extra Bed (${cnt} x ${er} x ${nights}N)`, amount: cnt * er * nights, roomNumber: primaryRoom, sourceKey: `xbed:${primaryRoom}` });
+  } else if (!c && b && (!Array.isArray(b.bookedRooms) || b.bookedRooms.length === 0) && reqs.length === 0) {
+    if (b.hasExtraBed) {
+      const cnt = Math.max(1, n(b.extraBedCount) || 1);
+      const er = n(b.extraBedRate);
+      const ebNights = Math.max(1, n(b.extraBedNights) || nights);
+      push({ id: `xbed-${b.id}`, kind: 'extra_bed', description: `Extra Bed / Mattress (${cnt} × ₹${er} × ${ebNights}N)`, amount: cnt * er * ebNights, roomNumber: primaryRoom, sourceKey: `xbed:${primaryRoom}` });
+    }
+    if (b.hasExtraPerson !== false && n(b.extraPersonChargeApplied) > 0) {
+      const epCnt = n(b.extraPersonCount);
+      const epRate = n(b.extraPersonRate);
+      const epNights = n(b.extraPersonNights) || nights;
+      const desc = epCnt > 0 && epRate > 0
+        ? `Extra Person (${epCnt} × ₹${epRate} × ${epNights}N)`
+        : 'Extra Person Charges';
+      push({ id: `xpax-${b.id}`, kind: 'extra_person', description: desc, amount: n(b.extraPersonChargeApplied), roomNumber: primaryRoom, sourceKey: `xpax:${b.id}` });
+    }
   }
   const early = n(c?.earlyCheckInCharge ?? b?.earlyCheckInCharge);
   if (early > 0) {
@@ -211,19 +310,33 @@ export function collectStayCharges(input: CollectStayInput): CollectStayResult {
 
   // 2a. POS orders (accurate pre-tax) — first, so they win de-dup
   (input.posOrders || []).forEach((po) => {
-    if (!po || isPaidAtCounter(po) || !belongsToStay(po)) return;
-    if (String(po.status || '').toLowerCase() === 'cancelled') return;
+    if (!po || isPaidAtCounter(po) || !belongsToStay(po) || po.isHeld) return;
+    if (
+      String(po.status || '').toLowerCase() === 'cancelled' ||
+      String(po.kotStatus || '').toLowerCase() === 'cancelled' ||
+      String(po.kitchenStatus || '').toLowerCase() === 'cancelled'
+    ) {
+      return;
+    }
     const items = Array.isArray(po.items)
-      ? po.items.map((it: AnyRec) => `${n(it.quantity ?? it.qty) || 1}x ${it.itemName || it.name || 'Item'}`).join(', ')
+      ? po.items
+          .map((it: AnyRec) => {
+            const rawName = String(it.itemName || it.name || 'Item');
+            const v = it.selectedVariant || it.variant;
+            const label = v && !rawName.endsWith(`(${v})`) ? `${rawName} (${v})` : rawName;
+            return `${n(it.quantity ?? it.qty) || 1}x ${label}`;
+          })
+          .join(', ')
       : '';
     push({
       id: String(po.id || po.orderNumber),
       kind: 'food',
-      description: `Food & Beverage — Order #${po.orderNumber || po.id}${items ? ` (${items})` : ''}`,
-      amount: posPreTax(po, s.foodGstRate),
+      description: `Food Bill — Order #${po.orderNumber || po.id}${po.isWithoutGst ? ' [GST Exempt]' : ''}`,
+      amount: posPreTax(po, po.isWithoutGst ? 0 : s.foodGstRate),
       date: String(po.date || po.createdAt || po.dateTime || '').slice(0, 10),
       roomNumber: String(po.roomNumber || primaryRoom),
       sourceKey: `pos:${po.id || po.orderNumber}`,
+      gstExempt: Boolean(po.isWithoutGst),
     });
   });
 
@@ -275,9 +388,24 @@ export function collectStayCharges(input: CollectStayInput): CollectStayResult {
     if (!ec) return;
     const kind = kindFromLabel(ec.category, ec.sourceType, undefined, ec.description);
     const key = sourceKeyFromId(ec.id, ec.sourceType, ec.sourceId) || `id:${ec.id}`;
-    // POS folio lines carry GST-inclusive grand total → convert to pre-tax
-    const amount = kind === 'food' && s.foodGstRate > 0 ? r2(n(ec.amount) / (1 + s.foodGstRate / 100)) : n(ec.amount);
-    push({ id: String(ec.id), kind, description: String(ec.description || ec.category || 'Charge'), amount, date: String(ec.date || ec.dateTime || '').slice(0, 10), roomNumber: primaryRoom, sourceKey: key });
+    const ecNoGst = Boolean(ec.isWithoutGst || ec.gstExempt || /\[GST Exempt\]/i.test(String(ec.description || '')));
+    // POS folio lines carry GST-inclusive grand total unless explicitly marked GST-exempt
+    const amount =
+      kind === 'food' && !ecNoGst && s.foodGstRate > 0
+        ? ec.taxAmount !== undefined && n(ec.taxAmount) >= 0
+          ? r2(Math.max(0, n(ec.amount) - n(ec.taxAmount)))
+          : r2(n(ec.amount) / (1 + s.foodGstRate / 100))
+        : n(ec.amount);
+    push({
+      id: String(ec.id),
+      kind,
+      description: String(ec.description || ec.category || 'Charge'),
+      amount,
+      date: String(ec.date || ec.dateTime || '').slice(0, 10),
+      roomNumber: primaryRoom,
+      sourceKey: key,
+      gstExempt: ecNoGst,
+    });
   });
 
   // 2e. /admin hub booking services (deduped by id, so the old C1 double entries collapse)
@@ -314,24 +442,109 @@ export function collectStayCharges(input: CollectStayInput): CollectStayResult {
     payments.push({ ...p, amount: r2(p.amount) });
   };
   const hubPayments: AnyRec[] = Array.isArray(b?.payments) ? b!.payments : [];
+  const allCheckinPosPays: AnyRec[] = (Array.isArray(c?.payments) ? c!.payments : []).filter(
+    (p: AnyRec) => p && n(p.amount) !== 0 && !String(p.notes || '').toLowerCase().includes('marked as due')
+  );
+
   if (hubPayments.length > 0) {
-    hubPayments.forEach((p, i) =>
-      addPay({ id: String(p.id || `bp-${i}`), amount: n(p.amount), method: String(p.paymentMethod || p.method || 'Cash'), date: String(p.date || p.dateTime || '').slice(0, 10), reference: p.transactionId || p.reference, note: p.notes })
+    const hubSum = r2(hubPayments.reduce((s, p) => s + n(p.amount), 0));
+    const hubHasAdvance = hubPayments.some(
+      (p) =>
+        p?.paymentType === 'Advance Deposit' ||
+        String(p?.id || '').toLowerCase().includes('adv') ||
+        String(p?.id || '').toLowerCase().includes('checkin') ||
+        String(p?.notes || '').toLowerCase().includes('advance')
     );
-    // Check-in payments made in legacy screens after the hub list was saved
-    (Array.isArray(c?.payments) ? c!.payments : []).forEach((p: AnyRec, i: number) => {
-      if (p.paymentType === 'Advance Deposit') return;
-      addPay({ id: String(p.id || `cp-${i}`), amount: n(p.amount), method: String(p.paymentMethod || p.method || 'Cash'), date: String(p.dateTime || p.date || '').slice(0, 10), reference: p.reference, note: p.notes });
+    hubPayments.forEach((p, i) =>
+      addPay({
+        id: String(p.id || `bp-${i}`),
+        amount: n(p.amount),
+        method: String(p.paymentMethod || p.method || 'Cash'),
+        date: String(p.date || p.dateTime || '').slice(0, 10),
+        reference: p.transactionId || p.reference,
+        note: p.notes,
+      })
+    );
+    // Include any check-in payments not already represented in booking.payments (deduped by ID / advance match)
+    allCheckinPosPays.forEach((p: AnyRec, i: number) => {
+      if (p.paymentType === 'Advance Deposit' && hubHasAdvance) {
+        // Avoid double-counting advance when booking.payments already carries it under a different synthetic ID
+        if (Math.abs(hubSum - n(p.amount)) < 1) return;
+      }
+      addPay({
+        id: String(p.id || `cp-${i}`),
+        amount: n(p.amount),
+        method: String(p.paymentMethod || p.method || 'Cash'),
+        date: String(p.date || p.dateTime || '').slice(0, 10),
+        reference: p.referenceNo || p.reference,
+        note: p.notes,
+      });
     });
-  } else {
-    const advance = n(c?.advanceAmount ?? c?.advancePaid ?? b?.advanceAmount);
-    if (advance > 0) {
-      addPay({ id: `adv-${c?.id || b?.id}`, amount: advance, method: String(c?.paymentMethod || b?.paymentMethod || 'Cash'), date: String(b?.bookingDate || checkInDate || '').slice(0, 10), note: 'Advance' });
+  } else if (allCheckinPosPays.length > 0) {
+    // Structured checkin.payments[] is authoritative (includes Advance Deposit, Partial Payment, Final Settlement, Hybrid splits)
+    // Never silently drop 'Advance Deposit' rows and never double-count scalar cashAmountPaid/onlineAmountPaid (BUG-P2-01)
+    allCheckinPosPays.forEach((p: AnyRec, i: number) => {
+      addPay({
+        id: String(p.id || `cp-${i}`),
+        amount: n(p.amount),
+        method: String(p.paymentMethod || p.method || 'Cash'),
+        date: String(p.date || p.dateTime || b?.bookingDate || checkInDate || '').slice(0, 10),
+        reference: p.referenceNo || p.reference,
+        note: p.notes,
+      });
+    });
+    // Include a separate pre-arrival booking.advanceAmount ONLY if it is not already covered by checkin.payments[]
+    const bAdv = n(b?.advanceAmount);
+    if (bAdv > 0) {
+      const ciSum = r2(allCheckinPosPays.reduce((s, p) => s + n(p.amount), 0));
+      const ciHasAdvOrCheckin = allCheckinPosPays.some(
+        (p) =>
+          p.paymentType === 'Advance Deposit' ||
+          String(p.id || '').toLowerCase().includes('adv') ||
+          String(p.id || '').toLowerCase().includes('checkin') ||
+          String(p.notes || '').toLowerCase().includes('advance')
+      );
+      if (!ciHasAdvOrCheckin && Math.abs(ciSum - bAdv) >= 1) {
+        addPay({
+          id: `adv-${b?.id || c?.id}`,
+          amount: bAdv,
+          method: String(b?.paymentMethod || 'Cash'),
+          date: String(b?.bookingDate || checkInDate || '').slice(0, 10),
+          note: 'Advance',
+        });
+      }
     }
-    (Array.isArray(c?.payments) ? c!.payments : []).forEach((p: AnyRec, i: number) => {
-      if (p.paymentType === 'Advance Deposit') return;
-      addPay({ id: String(p.id || `cp-${i}`), amount: n(p.amount), method: String(p.paymentMethod || p.method || 'Cash'), date: String(p.dateTime || p.date || '').slice(0, 10), reference: p.reference, note: p.notes });
-    });
+    if (n(b?.refundAmount) > 0) {
+      addPay({ id: `ref-${b?.id}`, amount: -n(b?.refundAmount), method: String(b?.paymentMethod || 'Cash'), date: checkOutDate, note: 'Refund' });
+    }
+  } else {
+    const deskPaid = (n(c?.cashAmountPaid) + n(c?.onlineAmountPaid)) > 0
+      ? n(c?.cashAmountPaid) + n(c?.onlineAmountPaid)
+      : undefined;
+    const advance = n(
+      c?.advanceAmount && n(c.advanceAmount) > 0
+        ? c.advanceAmount
+        : c?.advancePayment && n(c.advancePayment) > 0
+        ? c.advancePayment
+        : c?.advancePaid && n(c.advancePaid) > 0
+        ? c.advancePaid
+        : deskPaid !== undefined
+        ? deskPaid
+        : b?.advanceAmount
+    );
+    const resolvedMethod = String(
+      c?.paymentMethod ||
+      (n(c?.onlineAmountPaid) > 0 ? 'UPI' : n(c?.cashAmountPaid) > 0 ? 'Cash' : b?.paymentMethod || 'Cash')
+    );
+    if (advance > 0) {
+      addPay({
+        id: `adv-${c?.id || b?.id}`,
+        amount: advance,
+        method: resolvedMethod,
+        date: String(b?.bookingDate || checkInDate || '').slice(0, 10),
+        note: 'Advance',
+      });
+    }
     if (n(b?.refundAmount) > 0) {
       addPay({ id: `ref-${b?.id}`, amount: -n(b?.refundAmount), method: String(b?.paymentMethod || 'Cash'), date: checkOutDate, note: 'Refund' });
     }

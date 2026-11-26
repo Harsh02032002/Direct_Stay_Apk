@@ -49,9 +49,38 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onNavigateModu
     (b) => b.checkOutDate === todayStr && b.status !== 'Cancelled'
   );
 
-  const totalCollected = state.bookings
-    .filter((b) => b.status !== 'Cancelled')
-    .reduce((s, b) => s + (Number(b.amountPaid ?? b.advanceAmount) || 0), 0);
+  const activeInvoices = state.invoices.filter(
+    (inv) =>
+      inv &&
+      inv.documentType !== 'CreditNote' &&
+      inv.invoiceType !== 'Credit Note' &&
+      inv.invoiceStatus !== 'Superseded' &&
+      !inv.supersededByCreditNoteId
+  );
+
+  const totalCollected = (() => {
+    const invPaid = activeInvoices.reduce(
+      (s, i) => s + (Number(i.paidAmount ?? i.advancePaid) || 0),
+      0
+    );
+    const invoicedBkgIds = new Set(activeInvoices.map((i) => i.bookingId).filter(Boolean));
+    const uninvoicedAdv = state.bookings
+      .filter((b) => b.status !== 'Cancelled' && !invoicedBkgIds.has(b.id))
+      .reduce((s, b) => s + (Number(b.amountPaid ?? b.advanceAmount) || 0), 0);
+    return invPaid + uninvoicedAdv;
+  })();
+
+  const subscriptionDaysLeft = (() => {
+    if (!hotelProfile?.subscriptionEndDate) return null;
+    const end = new Date(hotelProfile.subscriptionEndDate);
+    if (Number.isNaN(end.getTime())) return null;
+    return Math.ceil((end.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+  })();
+  const isMembershipExpired =
+    hotelProfile?.subscriptionStatus === 'Expired' ||
+    (subscriptionDaysLeft !== null && subscriptionDaysLeft < 0);
+  const isMembershipExpiring =
+    !isMembershipExpired && subscriptionDaysLeft !== null && subscriptionDaysLeft <= 30;
 
   return (
     <ScrollView
@@ -79,6 +108,55 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onNavigateModu
           </Text>
         </View>
       </View>
+
+      {/* Expiring / Expired Membership Renew Now Alert Banner */}
+      {(isMembershipExpired || isMembershipExpiring) && (
+        <TouchableOpacity
+          activeOpacity={0.85}
+          onPress={() => onNavigateModule('profile')}
+          style={{
+            backgroundColor: isMembershipExpired ? COLORS.roseSoft : COLORS.amberSoft,
+            borderWidth: 1,
+            borderColor: isMembershipExpired ? COLORS.roseBorder : COLORS.amberBorder,
+            borderRadius: 14,
+            padding: 12,
+            marginBottom: 12,
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 10,
+          }}
+        >
+          <View style={{ flex: 1 }}>
+            <Text
+              style={{
+                fontSize: 12,
+                fontWeight: '800',
+                color: isMembershipExpired ? COLORS.rose : COLORS.amber,
+              }}
+            >
+              {isMembershipExpired
+                ? `Membership Expired (${Math.abs(subscriptionDaysLeft || 0)}d overdue)`
+                : `Membership Expiring in ${subscriptionDaysLeft} day(s)`}
+            </Text>
+            <Text style={{ fontSize: 11, color: COLORS.textSecondary, marginTop: 2 }}>
+              Tap Renew Now for Direct UPI Pay &amp; 18% GST renewal. All hotel data is safe.
+            </Text>
+          </View>
+          <View
+            style={{
+              backgroundColor: COLORS.espresso,
+              paddingHorizontal: 10,
+              paddingVertical: 6,
+              borderRadius: 10,
+            }}
+          >
+            <Text style={{ fontSize: 11, fontWeight: '800', color: COLORS.goldBright }}>
+              Renew Now →
+            </Text>
+          </View>
+        </TouchableOpacity>
+      )}
 
       {/* Quick Front Desk Actions (Responsive Padded Pills — Never Clips!) */}
       <View style={styles.quickRow}>

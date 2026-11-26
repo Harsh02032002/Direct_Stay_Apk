@@ -234,7 +234,7 @@ function buildInvoiceViewAndPrintData(
     gstNumber: inv.guestGstNumber || inv.gstNumber || chk?.gstNumber || bkg?.gstNumber,
   };
 
-  return toInvoicePrintData({
+  const printBase = toInvoicePrintData({
     hotel: hotelProfile,
     invoiceNumber: inv.invoiceNumber || inv.id,
     invoiceDate: inv.dateCreated || inv.date || inv.checkOutDate,
@@ -243,13 +243,21 @@ function buildInvoiceViewAndPrintData(
     folio,
     bill,
   });
+
+  return {
+    ...printBase,
+    invoiceStatus: inv.invoiceStatus,
+    documentType: inv.documentType,
+    originalInvoiceNumber: inv.originalInvoiceNumber,
+    creditNoteReason: inv.creditNoteReason,
+  } as InvoicePrintData;
 }
 
 export const InvoicesScreen: React.FC = () => {
-  const { state, hotelProfile, generateSeparateOrNewInvoice } = usePms();
+  const { state, hotelProfile, generateSeparateOrNewInvoice, undoCheckout } = usePms();
   const billSettings = normalizeBillSettings(hotelProfile);
 
-  const [subTab, setSubTab] = useState<'all' | 'gst' | 'nogst' | 'unpaid'>('all');
+  const [subTab, setSubTab] = useState<'all' | 'gst' | 'nogst' | 'unpaid' | 'credit_notes'>('all');
   const [dateFilter, setDateFilter] = useState<QuickDateFilter>('all');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
@@ -261,6 +269,37 @@ export const InvoicesScreen: React.FC = () => {
   const [genWithGst, setGenWithGst] = useState(true);
   const [genIncludeServices, setGenIncludeServices] = useState(true);
   const [generating, setGenerating] = useState(false);
+
+  const isCreditNoteInv = (inv: Invoice) =>
+    inv.documentType === 'CreditNote' || inv.invoiceType === 'Credit Note';
+  const isSupersededInv = (inv: Invoice) =>
+    inv.invoiceStatus === 'Superseded' || Boolean(inv.supersededByCreditNoteId);
+
+  const handleUndoCheckout = (inv: Invoice) => {
+    Alert.alert(
+      'Undo Checkout & Issue Credit Note',
+      `This will keep ${inv.invoiceNumber} immutable as SUPERSEDED, issue a Credit Note (CN/...), and reopen Room ${inv.roomNumber} to In-House. Continue?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Issue Credit Note',
+          style: 'destructive',
+          onPress: async () => {
+            const res = await undoCheckout(inv.id, 'Undo Checkout via Mobile Admin');
+            if (res.ok) {
+              Alert.alert(
+                'Checkout Reversed',
+                `Credit Note ${res.creditNote?.invoiceNumber || ''} issued and Room ${inv.roomNumber} restored to In-House.`
+              );
+              setViewingInvoice(null);
+            } else {
+              Alert.alert('Cannot Undo Checkout', res.error || 'Failed to undo checkout.');
+            }
+          },
+        },
+      ]
+    );
+  };
 
   const openGeneratorForBooking = (bookingId: string, defaultWithGst: boolean) => {
     setSelectedBookingId(bookingId);
@@ -282,9 +321,12 @@ export const InvoicesScreen: React.FC = () => {
 
   const filteredInvoices = state.invoices.filter((inv) => {
     const noGst = isInvoiceLockedNoGst(inv);
-    if (subTab === 'gst' && noGst) return false;
-    if (subTab === 'nogst' && !noGst) return false;
-    if (subTab === 'unpaid' && inv.isPaid) return false;
+    const isCn = isCreditNoteInv(inv);
+    const isSup = isSupersededInv(inv);
+    if (subTab === 'credit_notes' && !isCn) return false;
+    if (subTab === 'gst' && (noGst || isCn)) return false;
+    if (subTab === 'nogst' && (!noGst || isCn)) return false;
+    if (subTab === 'unpaid' && (inv.isPaid || isCn || isSup || Number(inv.pendingAmount || 0) <= 0)) return false;
     if (
       !matchesQuickDateFilter(
         inv.dateCreated || inv.date || inv.checkOutDate,
@@ -347,17 +389,24 @@ export const InvoicesScreen: React.FC = () => {
           {
             id: 'gst',
             label: 'GST Invoices',
-            count: state.invoices.filter((i) => !isInvoiceLockedNoGst(i)).length,
+            count: state.invoices.filter((i) => !isInvoiceLockedNoGst(i) && !isCreditNoteInv(i)).length,
           },
           {
             id: 'nogst',
             label: 'Bill of Supply',
-            count: state.invoices.filter((i) => isInvoiceLockedNoGst(i)).length,
+            count: state.invoices.filter((i) => isInvoiceLockedNoGst(i) && !isCreditNoteInv(i)).length,
           },
           {
             id: 'unpaid',
             label: 'Balance Due',
-            count: state.invoices.filter((i) => !i.isPaid).length,
+            count: state.invoices.filter(
+              (i) => !i.isPaid && !isCreditNoteInv(i) && !isSupersededInv(i) && Number(i.pendingAmount || 0) > 0
+            ).length,
+          },
+          {
+            id: 'credit_notes',
+            label: 'Credit Notes',
+            count: state.invoices.filter((i) => isCreditNoteInv(i)).length,
           },
         ]}
       />
@@ -408,26 +457,42 @@ export const InvoicesScreen: React.FC = () => {
         ) : (
           filteredInvoices.map((inv) => {
             const noGst = isInvoiceLockedNoGst(inv);
+            const isCn = isCreditNoteInv(inv);
+            const isSup = isSupersededInv(inv);
             return (
               <TouchableOpacity
                 key={inv.id}
                 activeOpacity={0.85}
                 onPress={() => setViewingInvoice(inv)}
-                style={styles.invCard}
+                style={[
+                  styles.invCard,
+                  isSup && { opacity: 0.78, borderColor: COLORS.amberBorder },
+                  isCn && { borderColor: COLORS.roseBorder, backgroundColor: '#FFF8F8' },
+                ]}
               >
                 <View style={styles.invRowTop}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1, flexWrap: 'wrap' }}>
                     <Text style={styles.invNo} numberOfLines={1}>
                       {inv.invoiceNumber || inv.id}
                     </Text>
-                    {inv.isSeparateInvoice && (
+                    {isCn && (
+                      <View style={[styles.sepBadge, { backgroundColor: COLORS.roseSoft }]}>
+                        <Text style={[styles.sepBadgeText, { color: COLORS.rose }]}>CREDIT NOTE</Text>
+                      </View>
+                    )}
+                    {isSup && (
+                      <View style={[styles.sepBadge, { backgroundColor: COLORS.amberSoft }]}>
+                        <Text style={[styles.sepBadgeText, { color: COLORS.amber }]}>SUPERSEDED</Text>
+                      </View>
+                    )}
+                    {inv.isSeparateInvoice && !isCn && (
                       <View style={styles.sepBadge}>
                         <Text style={styles.sepBadgeText}>SEPARATE</Text>
                       </View>
                     )}
                   </View>
-                  <Text style={styles.invTotal}>
-                    ₹{formatMoney(Number(inv.finalAmount || 0))}
+                  <Text style={[styles.invTotal, isCn && { color: COLORS.rose }]}>
+                    {isCn ? '-' : ''}₹{formatMoney(Math.abs(Number(inv.finalAmount || 0)))}
                   </Text>
                 </View>
 
@@ -437,29 +502,53 @@ export const InvoicesScreen: React.FC = () => {
                 <Text style={styles.invDates}>
                   {formatDateLabel(inv.checkInDate)} → {formatDateLabel(inv.checkOutDate)} • Issued{' '}
                   {formatDateLabel(inv.dateCreated || inv.date)}
+                  {isSup ? ' • Reconciled Balance: ₹0' : ''}
                 </Text>
 
                 <View style={styles.invFooter}>
                   <View
                     style={[
                       styles.lockBadge,
-                      { backgroundColor: noGst ? COLORS.amberSoft : COLORS.emeraldSoft },
+                      {
+                        backgroundColor: isCn
+                          ? COLORS.roseSoft
+                          : isSup
+                          ? COLORS.amberSoft
+                          : noGst
+                          ? COLORS.amberSoft
+                          : COLORS.emeraldSoft,
+                      },
                     ]}
                   >
-                    <Lock size={11} color={noGst ? COLORS.amber : COLORS.emerald} />
+                    <Lock
+                      size={11}
+                      color={isCn ? COLORS.rose : isSup ? COLORS.amber : noGst ? COLORS.amber : COLORS.emerald}
+                    />
                     <Text
                       style={[
                         styles.lockBadgeText,
-                        { color: noGst ? COLORS.amber : COLORS.emerald },
+                        { color: isCn ? COLORS.rose : isSup ? COLORS.amber : noGst ? COLORS.amber : COLORS.emerald },
                       ]}
                     >
-                      {noGst
+                      {isCn
+                        ? `Reverses ${inv.originalInvoiceNumber || 'Invoice'}`
+                        : isSup
+                        ? 'Superseded (Reversed)'
+                        : noGst
                         ? 'Bill of Supply (0%)'
                         : `Tax Invoice (${inv.gstRate || billSettings.roomGstRate}%)`}
                     </Text>
                   </View>
 
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    {!isCn && !isSup && !inv.isSeparateInvoice && (
+                      <TouchableOpacity
+                        onPress={() => handleUndoCheckout(inv)}
+                        style={[styles.pdfQuickBtn, { backgroundColor: COLORS.roseSoft, borderColor: COLORS.roseBorder }]}
+                      >
+                        <Text style={[styles.pdfQuickBtnText, { color: COLORS.rose }]}>Undo</Text>
+                      </TouchableOpacity>
+                    )}
                     <TouchableOpacity
                       onPress={() => handlePrintInvoicePdf(inv)}
                       style={styles.pdfQuickBtn}
@@ -497,31 +586,104 @@ export const InvoicesScreen: React.FC = () => {
                 const b = printData.bill;
                 const isTax = b.isGstInvoice;
                 const h = printData.hotel;
+                const isCnView = isCreditNoteInv(viewingInvoice);
+                const isSupView = isSupersededInv(viewingInvoice);
                 return (
                   <>
                     <View style={styles.previewTopBar}>
                       <View
                         style={[
                           styles.lockBadge,
-                          { backgroundColor: !isTax ? COLORS.amberSoft : COLORS.emeraldSoft },
+                          {
+                            backgroundColor: isCnView
+                              ? COLORS.roseSoft
+                              : isSupView
+                              ? COLORS.amberSoft
+                              : !isTax
+                              ? COLORS.amberSoft
+                              : COLORS.emeraldSoft,
+                          },
                         ]}
                       >
-                        <Lock size={12} color={!isTax ? COLORS.amber : COLORS.emerald} />
+                        <Lock
+                          size={12}
+                          color={
+                            isCnView
+                              ? COLORS.rose
+                              : isSupView
+                              ? COLORS.amber
+                              : !isTax
+                              ? COLORS.amber
+                              : COLORS.emerald
+                          }
+                        />
                         <Text
                           style={[
                             styles.lockBadgeText,
-                            { color: !isTax ? COLORS.amber : COLORS.emerald },
+                            {
+                              color: isCnView
+                                ? COLORS.rose
+                                : isSupView
+                                ? COLORS.amber
+                                : !isTax
+                                ? COLORS.amber
+                                : COLORS.emerald,
+                            },
                           ]}
                         >
-                          {isTax
+                          {isCnView
+                            ? `CREDIT NOTE (${viewingInvoice.invoiceNumber})`
+                            : isSupView
+                            ? 'SUPERSEDED INVOICE (REVERSED)'
+                            : isTax
                             ? `TAX INVOICE (${b.headlineGstRate}% GST)`
                             : 'BILL OF SUPPLY (0% GST)'}
                         </Text>
                       </View>
-                      <TouchableOpacity onPress={() => setViewingInvoice(null)}>
-                        <X size={20} color={COLORS.textSecondary} />
-                      </TouchableOpacity>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                        {!isCnView && !isSupView && !viewingInvoice.isSeparateInvoice && (
+                          <TouchableOpacity
+                            onPress={() => handleUndoCheckout(viewingInvoice)}
+                            style={[
+                              styles.pdfQuickBtn,
+                              { backgroundColor: COLORS.roseSoft, borderColor: COLORS.roseBorder },
+                            ]}
+                          >
+                            <Text style={[styles.pdfQuickBtnText, { color: COLORS.rose }]}>
+                              Undo Checkout
+                            </Text>
+                          </TouchableOpacity>
+                        )}
+                        <TouchableOpacity onPress={() => setViewingInvoice(null)}>
+                          <X size={20} color={COLORS.textSecondary} />
+                        </TouchableOpacity>
+                      </View>
                     </View>
+
+                    {(isSupView || isCnView) && (
+                      <View
+                        style={{
+                          backgroundColor: isCnView ? COLORS.roseSoft : COLORS.amberSoft,
+                          borderColor: isCnView ? COLORS.roseBorder : COLORS.amberBorder,
+                          borderWidth: 1,
+                          borderRadius: 10,
+                          padding: 10,
+                          marginBottom: 8,
+                        }}
+                      >
+                        <Text
+                          style={{
+                            fontSize: 11,
+                            fontWeight: '800',
+                            color: isCnView ? COLORS.rose : COLORS.amber,
+                          }}
+                        >
+                          {isCnView
+                            ? `CREDIT NOTE — Reverses Original Invoice ${viewingInvoice.originalInvoiceNumber || ''}`
+                            : 'SUPERSEDED — Original invoice reversed via Credit Note. Reconciled Balance Due: ₹0'}
+                        </Text>
+                      </View>
+                    )}
 
                     <ScrollView
                       showsVerticalScrollIndicator={false}
