@@ -49,7 +49,7 @@ export const AdminLoginScreen: React.FC<AdminLoginScreenProps> = ({ onLoginSucce
   const handleRequestOtp = async () => {
     setFpFeedback(null);
     if (!fpIdentifier.trim()) {
-      setFpFeedback({ ok: false, text: 'Enter your registered Username, Email, or Mobile number.' });
+      setFpFeedback({ ok: false, text: 'Enter your Hotel Admin or Staff Login Username.' });
       return;
     }
     setFpLoading(true);
@@ -193,8 +193,8 @@ export const AdminLoginScreen: React.FC<AdminLoginScreenProps> = ({ onLoginSucce
               </View>
               <Text style={{ fontSize: 12, color: COLORS.textSecondary, marginBottom: 14, lineHeight: 17 }}>
                 {forgotStep === 'request'
-                  ? 'Enter your Hotel Admin / Staff Username, Email, or Mobile. We will send a 6-digit OTP to your registered email.'
-                  : `Enter the 6-digit OTP sent to ${fpMaskedEmail || 'your email'} and set a new password.`}
+                  ? 'Enter your Login Username only. A 6-digit OTP will be sent strictly to the registered email saved on your account.'
+                  : `Enter the 6-digit OTP sent to your registered email (${fpMaskedEmail || 'on file'}) and set a new password.`}
               </Text>
 
               {fpFeedback ? (
@@ -214,20 +214,23 @@ export const AdminLoginScreen: React.FC<AdminLoginScreenProps> = ({ onLoginSucce
               ) : null}
 
               <View style={styles.fieldGroup}>
-                <Text style={styles.label}>REGISTERED USERNAME / EMAIL / MOBILE</Text>
+                <Text style={styles.label}>LOGIN USERNAME</Text>
                 <View style={styles.inputRow}>
                   <User size={17} color={COLORS.goldDark} />
                   <TextInput
                     value={fpIdentifier}
                     onChangeText={setFpIdentifier}
                     editable={forgotStep === 'request'}
-                    placeholder="Username, Email, or Mobile"
+                    placeholder="Enter Hotel Admin or Staff Username"
                     placeholderTextColor={COLORS.textMuted}
                     autoCapitalize="none"
                     autoCorrect={false}
                     style={[styles.input, forgotStep === 'verify' && { opacity: 0.65 }]}
                   />
                 </View>
+                <Text style={{ fontSize: 11, color: COLORS.goldDark, marginTop: 6, fontWeight: '600' }}>
+                  🔒 OTP goes ONLY to your registered account email — custom email entry is disabled.
+                </Text>
               </View>
 
               {forgotStep === 'verify' && (

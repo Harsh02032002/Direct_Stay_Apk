@@ -318,17 +318,22 @@ export async function requestForgotPasswordOtpApi(
 ): Promise<{ ok: boolean; maskedEmail?: string; expiresInMinutes?: number; message?: string; error?: string }> {
   const clean = identifier.trim();
   if (!clean) {
-    return { ok: false, error: 'Please enter your registered Username, Email, or Mobile number.' };
+    return { ok: false, error: 'Please enter your Login Username.' };
   }
   try {
     const res = await fetch(`${apiBaseUrl}/api/auth/forgot-password/request-otp`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ identifier: clean, portalMode: 'mobile' }),
+      body: JSON.stringify({ username: clean, identifier: clean, portalMode: 'mobile' }),
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json?.success) {
-      return { ok: false, error: json?.error || `Could not send OTP (${res.status})` };
+      const msg =
+        json?.error ||
+        (res.status === 404
+          ? 'Forgot Password API is not deployed on server yet (404). Please update & restart the live VPS server.'
+          : `Could not send OTP (${res.status})`);
+      return { ok: false, error: msg };
     }
     return {
       ok: true,
