@@ -31,7 +31,7 @@ jobs:
           cache: 'npm'
 
       - name: Install NPM dependencies
-        run: npm install --legacy-peer-deps
+        run: npm install --legacy-peer-deps --include=dev
 
       - name: TypeScript Typecheck
         run: npm run typecheck
