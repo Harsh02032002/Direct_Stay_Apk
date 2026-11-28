@@ -12,6 +12,7 @@ import {
 import {
   Users,
   IndianRupee,
+  Mail,
   Wallet,
   FileBarChart2,
   ShieldCheck,
@@ -21,6 +22,7 @@ import {
   Square,
 } from 'lucide-react-native';
 import { usePms } from '../context/PmsContext';
+import { sendSalaryPayslipEmailApi, isValidEmail } from '../api/directStayApi';
 import { COLORS } from '../theme/colors';
 import { SubTabStrip } from '../components/SubTabStrip';
 import {
@@ -99,6 +101,7 @@ export const FinanceGovernanceModulesScreen: React.FC<Props> = ({ moduleId }) =>
   const [hrmTab, setHrmTab] = useState<'staff' | 'salary'>('staff');
   const [stName, setStName] = useState('');
   const [stMobile, setStMobile] = useState('');
+  const [stEmail, setStEmail] = useState('');
   const [stDept, setStDept] = useState('Reception');
   const [stSalary, setStSalary] = useState('15000');
   const [stUser, setStUser] = useState('');
@@ -275,6 +278,14 @@ export const FinanceGovernanceModulesScreen: React.FC<Props> = ({ moduleId }) =>
                     style={[styles.input, { flex: 1 }]}
                   />
                 </View>
+                <TextInput
+                  value={stEmail}
+                  onChangeText={setStEmail}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  placeholder="Staff Email (for Credentials, Payslip & Password OTP)"
+                  style={[styles.input, { marginBottom: 10 }]}
+                />
                 <TouchableOpacity
                   onPress={async () => {
                     if (!stName.trim()) {
@@ -284,6 +295,7 @@ export const FinanceGovernanceModulesScreen: React.FC<Props> = ({ moduleId }) =>
                     await addStaffMember({
                       name: stName,
                       mobile: stMobile,
+                      email: stEmail.trim() || undefined,
                       department: stDept,
                       designation: stDept,
                       username: stUser || stName.toLowerCase().replace(/\s+/g, ''),
@@ -292,6 +304,7 @@ export const FinanceGovernanceModulesScreen: React.FC<Props> = ({ moduleId }) =>
                     });
                     setStName('');
                     setStMobile('');
+                    setStEmail('');
                     setStUser('');
                     setStPass('');
                     Alert.alert('Saved', 'Staff member synced live.');
@@ -360,9 +373,50 @@ export const FinanceGovernanceModulesScreen: React.FC<Props> = ({ moduleId }) =>
                         {s.department || s.designation} • {s.status}
                       </Text>
                     </View>
-                    <Text style={styles.amtText}>
-                      ₹{Number(s.salary || 0).toLocaleString('en-IN')}/mo
-                    </Text>
+                    <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                      <Text style={styles.amtText}>
+                        ₹{Number(s.salary || 0).toLocaleString('en-IN')}/mo
+                      </Text>
+                      {s.email && isValidEmail(s.email) && session ? (
+                        <TouchableOpacity
+                          onPress={async () => {
+                            const month = new Date().toISOString().slice(0, 7);
+                            const res = await sendSalaryPayslipEmailApi(session, {
+                              hotelName: hotelProfile?.name || 'DirectStay Hotel',
+                              staffName: s.name,
+                              role: s.designation || s.department || 'Staff',
+                              month,
+                              baseSalary: Number(s.salary || 0),
+                              netAmount: Number(s.salary || 0),
+                              paymentMethod: 'Bank Transfer / UPI',
+                              recipientEmail: s.email,
+                              forceResend: true,
+                            });
+                            if (res.delivered) {
+                              Alert.alert('Payslip Sent', `Salary payslip emailed to ${s.email}.`);
+                            } else {
+                              Alert.alert('Email Failed', res.error || 'Could not email payslip.');
+                            }
+                          }}
+                          style={{
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            gap: 4,
+                            backgroundColor: '#EEF2FF',
+                            borderColor: '#C7D2FE',
+                            borderWidth: 1,
+                            paddingHorizontal: 8,
+                            paddingVertical: 4,
+                            borderRadius: 8,
+                          }}
+                        >
+                          <Mail size={11} color={COLORS.indigo} />
+                          <Text style={{ fontSize: 10.5, fontWeight: '700', color: COLORS.indigo }}>
+                            Email Payslip
+                          </Text>
+                        </TouchableOpacity>
+                      ) : null}
+                    </View>
                   </View>
                 ))
               )}

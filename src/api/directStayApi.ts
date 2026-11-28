@@ -307,3 +307,118 @@ export async function generateLiveInvoiceApi(
     return { ok: false, error: err?.message || 'Network error generating invoice' };
   }
 }
+
+// =========================================================================
+// FORGOT PASSWORD VIA 6-DIGIT EMAIL OTP (SHARED WITH WEB PORTAL)
+// =========================================================================
+
+export async function requestForgotPasswordOtpApi(
+  identifier: string,
+  apiBaseUrl: string = LIVE_API_BASE_URL
+): Promise<{ ok: boolean; maskedEmail?: string; expiresInMinutes?: number; message?: string; error?: string }> {
+  const clean = identifier.trim();
+  if (!clean) {
+    return { ok: false, error: 'Please enter your registered Username, Email, or Mobile number.' };
+  }
+  try {
+    const res = await fetch(`${apiBaseUrl}/api/auth/forgot-password/request-otp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ identifier: clean, portalMode: 'mobile' }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json?.success) {
+      return { ok: false, error: json?.error || `Could not send OTP (${res.status})` };
+    }
+    return {
+      ok: true,
+      maskedEmail: json.maskedEmail,
+      expiresInMinutes: json.expiresInMinutes,
+      message: json.message,
+    };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Network error requesting password reset OTP' };
+  }
+}
+
+export async function verifyForgotPasswordOtpApi(
+  identifier: string,
+  otp: string,
+  newPassword: string,
+  apiBaseUrl: string = LIVE_API_BASE_URL
+): Promise<{ ok: boolean; message?: string; error?: string }> {
+  try {
+    const res = await fetch(`${apiBaseUrl}/api/auth/forgot-password/verify-reset`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        identifier: identifier.trim(),
+        otp: otp.trim(),
+        newPassword: newPassword.trim(),
+      }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json?.success) {
+      return { ok: false, error: json?.error || `Password reset failed (${res.status})` };
+    }
+    return { ok: true, message: json.message };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Network error verifying OTP' };
+  }
+}
+
+// =========================================================================
+// AUTOMATED TRANSACTIONAL EMAIL DISPATCH (MATCHING WEB /ADMIN PORTAL)
+// =========================================================================
+
+const EMAIL_VALID_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+export const isValidEmail = (e?: string | null): boolean => EMAIL_VALID_RE.test(String(e || '').trim());
+
+async function postAuthedEmail(
+  session: AdminSession,
+  path: string,
+  payload: Record<string, any>,
+  apiBaseUrl: string = LIVE_API_BASE_URL
+): Promise<{ ok: boolean; delivered: boolean; error?: string }> {
+  try {
+    const res = await fetch(`${apiBaseUrl}${path}`, {
+      method: 'POST',
+      headers: {
+        ...buildAuthHeaders(session),
+        'x-target-hotel-id': session.hotelId,
+      },
+      body: JSON.stringify({ hotelId: session.hotelId, ...payload }),
+    });
+    const json = await res.json().catch(() => ({}));
+    const result = json?.result || json;
+    if (!res.ok || json?.success === false) {
+      return { ok: false, delivered: false, error: json?.error || result?.reason || `HTTP ${res.status}` };
+    }
+    const delivered = Boolean(json?.delivered ?? result?.delivered);
+    const failed = result?.status === 'failed' || result?.status === 'skipped_unconfigured';
+    return { ok: !failed, delivered, error: failed ? result?.reason : undefined };
+  } catch (err: any) {
+    return { ok: false, delivered: false, error: err?.message || 'Email network error' };
+  }
+}
+
+export const sendBookingEmailApi = (session: AdminSession, payload: Record<string, any>) =>
+  postAuthedEmail(session, '/api/bookings/send-email', payload);
+
+export const sendCheckInWelcomeEmailApi = (session: AdminSession, payload: Record<string, any>) =>
+  postAuthedEmail(session, '/api/email/checkin-welcome', payload);
+
+export const sendGuestInvoiceEmailApi = (session: AdminSession, payload: Record<string, any>) =>
+  postAuthedEmail(session, '/api/email/dispatch-invoice', payload);
+
+export const sendCheckoutThankYouEmailApi = (session: AdminSession, payload: Record<string, any>) =>
+  postAuthedEmail(session, '/api/email/checkout-thankyou', payload);
+
+export const sendStaffCredentialsEmailApi = (session: AdminSession, payload: Record<string, any>) =>
+  postAuthedEmail(session, '/api/email/staff-credentials', payload);
+
+export const sendSalaryPayslipEmailApi = (session: AdminSession, payload: Record<string, any>) =>
+  postAuthedEmail(session, '/api/email/salary-payslip', payload);
+
+export const sendNightAuditSummaryEmailApi = (session: AdminSession, payload: Record<string, any>) =>
+  postAuthedEmail(session, '/api/email/night-audit', payload);

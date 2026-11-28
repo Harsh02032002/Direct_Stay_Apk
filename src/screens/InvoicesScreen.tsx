@@ -3,6 +3,7 @@ import {
   View,
   Text,
   ScrollView,
+  TextInput,
   TouchableOpacity,
   Modal,
   Alert,
@@ -11,6 +12,7 @@ import {
 import {
   FilePlus2,
   Lock,
+  Mail,
   Printer,
   Share2,
   X,
@@ -18,6 +20,7 @@ import {
   Square,
 } from 'lucide-react-native';
 import { usePms } from '../context/PmsContext';
+import { sendGuestInvoiceEmailApi, isValidEmail } from '../api/directStayApi';
 import { COLORS } from '../theme/colors';
 import { HotelProfile, Invoice, PmsStateSnapshot } from '../types/pms';
 import { SubTabStrip } from '../components/SubTabStrip';
@@ -254,7 +257,7 @@ function buildInvoiceViewAndPrintData(
 }
 
 export const InvoicesScreen: React.FC = () => {
-  const { state, hotelProfile, generateSeparateOrNewInvoice, undoCheckout } = usePms();
+  const { session, state, hotelProfile, generateSeparateOrNewInvoice, undoCheckout } = usePms();
   const billSettings = normalizeBillSettings(hotelProfile);
 
   const [subTab, setSubTab] = useState<'all' | 'gst' | 'nogst' | 'unpaid' | 'credit_notes'>('all');
@@ -264,6 +267,66 @@ export const InvoicesScreen: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
 
   const [viewingInvoice, setViewingInvoice] = useState<Invoice | null>(null);
+  const [emailPromptInv, setEmailPromptInv] = useState<Invoice | null>(null);
+  const [emailInput, setEmailInput] = useState('');
+  const [sendingEmail, setSendingEmail] = useState(false);
+
+  const openEmailInvoicePrompt = (inv: Invoice) => {
+    const bkg = state.bookings.find((b) => b.id === inv.bookingId);
+    const chk = state.checkins.find((c) => c.id === inv.checkInId || c.bookingId === inv.bookingId);
+    const prefill = String(chk?.email || bkg?.email || '').trim();
+    setEmailInput(prefill);
+    setEmailPromptInv(inv);
+  };
+
+  const handleDispatchInvoiceEmail = async () => {
+    if (!session || !emailPromptInv) return;
+    const cleanEmail = emailInput.trim();
+    if (!isValidEmail(cleanEmail)) {
+      Alert.alert('Invalid Email', 'Please enter a valid recipient email address.');
+      return;
+    }
+    const pd = buildInvoiceViewAndPrintData(emailPromptInv, state, hotelProfile);
+    const b = pd.bill;
+    setSendingEmail(true);
+    const res = await sendGuestInvoiceEmailApi(session, {
+      hotelName: hotelProfile?.name || 'DirectStay Hotel',
+      hotelGstin: hotelProfile?.gstNumber || '',
+      hotelAddress: hotelProfile?.address || '',
+      hotelPhone: hotelProfile?.phoneNumber || hotelProfile?.phone || '',
+      guestName: emailPromptInv.guestName,
+      invoiceNumber: emailPromptInv.invoiceNumber || emailPromptInv.id,
+      roomNumber: emailPromptInv.roomNumber || '101',
+      checkInDate: emailPromptInv.checkInDate || '',
+      checkOutDate: emailPromptInv.checkOutDate || '',
+      tariffAmount: b.legacy.roomCharges,
+      foodCharges: b.legacy.foodCharges,
+      otherCharges: r2(
+        b.legacy.waterCharges +
+          b.legacy.laundryCharges +
+          b.legacy.serviceCharges +
+          b.legacy.otherCharges +
+          b.legacy.fineCharges
+      ),
+      discount: b.discount,
+      cgst: b.cgst,
+      sgst: b.sgst,
+      totalAmount: b.grandTotal,
+      amountPaid: b.receipts,
+      balanceDue: b.balance,
+      isWithoutGst: !b.isGstInvoice,
+      paymentMode: String(emailPromptInv.paymentMethod || 'UPI'),
+      recipientEmail: cleanEmail,
+      forceResend: true,
+    });
+    setSendingEmail(false);
+    if (res.delivered) {
+      setEmailPromptInv(null);
+      Alert.alert('Email Sent', `Invoice ${emailPromptInv.invoiceNumber || emailPromptInv.id} emailed to ${cleanEmail}.`);
+    } else {
+      Alert.alert('Email Failed', res.error || 'Could not deliver invoice email.');
+    }
+  };
   const [generatorOpen, setGeneratorOpen] = useState(false);
   const [selectedBookingId, setSelectedBookingId] = useState(state.bookings[0]?.id || '');
   const [genWithGst, setGenWithGst] = useState(true);
@@ -892,7 +955,16 @@ export const InvoicesScreen: React.FC = () => {
                       >
                         <Printer size={15} color={COLORS.espresso} />
                         <Text style={styles.shareBtnText} numberOfLines={1}>
-                          Print / Download PDF
+                          Print / PDF
+                        </Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => openEmailInvoicePrompt(viewingInvoice)}
+                        style={[styles.pdfShareSecondaryBtn, { backgroundColor: '#EEF2FF', borderColor: '#C7D2FE' }]}
+                      >
+                        <Mail size={15} color={COLORS.indigo} />
+                        <Text style={[styles.pdfShareSecondaryText, { color: COLORS.indigo }]} numberOfLines={1}>
+                          Email
                         </Text>
                       </TouchableOpacity>
                       <TouchableOpacity
@@ -901,7 +973,7 @@ export const InvoicesScreen: React.FC = () => {
                       >
                         <Share2 size={15} color={COLORS.espresso} />
                         <Text style={styles.pdfShareSecondaryText} numberOfLines={1}>
-                          Share PDF
+                          Share
                         </Text>
                       </TouchableOpacity>
                     </View>
@@ -923,6 +995,58 @@ export const InvoicesScreen: React.FC = () => {
                   </>
                 );
               })()}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Email Invoice Recipient Modal */}
+      <Modal visible={Boolean(emailPromptInv)} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalCard, { padding: 18 }]}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Mail size={18} color={COLORS.indigo} />
+                <Text style={{ fontSize: 15, fontWeight: '800', color: COLORS.textPrimary }}>
+                  Email Guest Tax Invoice
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => setEmailPromptInv(null)}>
+                <X size={20} color={COLORS.textMuted} />
+              </TouchableOpacity>
+            </View>
+            <Text style={{ fontSize: 12, color: COLORS.textSecondary, marginBottom: 10 }}>
+              Invoice {emailPromptInv?.invoiceNumber || emailPromptInv?.id} ({emailPromptInv?.guestName})
+            </Text>
+            <TextInput
+              value={emailInput}
+              onChangeText={setEmailInput}
+              placeholder="guest@example.com"
+              placeholderTextColor={COLORS.textMuted}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoCorrect={false}
+              style={{
+                borderWidth: 1,
+                borderColor: COLORS.border,
+                borderRadius: 12,
+                paddingHorizontal: 12,
+                paddingVertical: 11,
+                fontSize: 14,
+                color: COLORS.textPrimary,
+                backgroundColor: '#F8FAFC',
+                marginBottom: 14,
+              }}
+            />
+            <TouchableOpacity
+              disabled={sendingEmail}
+              onPress={handleDispatchInvoiceEmail}
+              style={[styles.shareBtn, { opacity: sendingEmail ? 0.6 : 1 }]}
+            >
+              <Mail size={15} color={COLORS.espresso} />
+              <Text style={styles.shareBtnText}>
+                {sendingEmail ? 'Sending Email...' : 'Send Invoice Email Now'}
+              </Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>

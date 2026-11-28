@@ -10,10 +10,15 @@ import {
   Platform,
   ScrollView,
 } from 'react-native';
-import { Building2, Lock, User, Eye, EyeOff, ShieldCheck, AlertTriangle } from 'lucide-react-native';
+import { Building2, Lock, User, Eye, EyeOff, ShieldCheck, AlertTriangle, Mail, KeyRound, ArrowLeft } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { COLORS } from '../theme/colors';
-import { LIVE_API_BASE_URL, loginHotelAdminApi } from '../api/directStayApi';
+import {
+  LIVE_API_BASE_URL,
+  loginHotelAdminApi,
+  requestForgotPasswordOtpApi,
+  verifyForgotPasswordOtpApi,
+} from '../api/directStayApi';
 import { AdminSession } from '../types/pms';
 import { openWhatsAppSafe } from '../utils/iosPlatformHelpers';
 
@@ -29,6 +34,69 @@ export const AdminLoginScreen: React.FC<AdminLoginScreenProps> = ({ onLoginSucce
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [blockInfo, setBlockInfo] = useState<{ type: string; hotelName?: string } | null>(null);
+
+  // Forgot Password via 6-Digit Email OTP
+  const [forgotMode, setForgotMode] = useState(false);
+  const [forgotStep, setForgotStep] = useState<'request' | 'verify'>('request');
+  const [fpIdentifier, setFpIdentifier] = useState('');
+  const [fpMaskedEmail, setFpMaskedEmail] = useState('');
+  const [fpOtp, setFpOtp] = useState('');
+  const [fpNewPass, setFpNewPass] = useState('');
+  const [fpConfirmPass, setFpConfirmPass] = useState('');
+  const [fpLoading, setFpLoading] = useState(false);
+  const [fpFeedback, setFpFeedback] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const handleRequestOtp = async () => {
+    setFpFeedback(null);
+    if (!fpIdentifier.trim()) {
+      setFpFeedback({ ok: false, text: 'Enter your registered Username, Email, or Mobile number.' });
+      return;
+    }
+    setFpLoading(true);
+    const res = await requestForgotPasswordOtpApi(fpIdentifier, LIVE_API_BASE_URL);
+    setFpLoading(false);
+    if (!res.ok) {
+      setFpFeedback({ ok: false, text: res.error || 'Could not send OTP.' });
+      return;
+    }
+    setFpMaskedEmail(res.maskedEmail || '');
+    setFpOtp('');
+    setForgotStep('verify');
+    setFpFeedback({
+      ok: true,
+      text: res.message || `6-digit OTP sent to ${res.maskedEmail}. Check Inbox or Spam.`,
+    });
+  };
+
+  const handleVerifyReset = async () => {
+    setFpFeedback(null);
+    if (fpOtp.trim().length !== 6) {
+      setFpFeedback({ ok: false, text: 'Enter the 6-digit OTP from your email.' });
+      return;
+    }
+    if (fpNewPass.trim().length < 6) {
+      setFpFeedback({ ok: false, text: 'New password must be at least 6 characters.' });
+      return;
+    }
+    if (fpNewPass.trim() !== fpConfirmPass.trim()) {
+      setFpFeedback({ ok: false, text: 'New passwords do not match.' });
+      return;
+    }
+    setFpLoading(true);
+    const res = await verifyForgotPasswordOtpApi(fpIdentifier, fpOtp, fpNewPass, LIVE_API_BASE_URL);
+    setFpLoading(false);
+    if (!res.ok) {
+      setFpFeedback({ ok: false, text: res.error || 'OTP verification failed.' });
+      return;
+    }
+    setFpFeedback({ ok: true, text: res.message || 'Password updated! Sign in with your new password.' });
+    setUsername(fpIdentifier.trim());
+    setPassword('');
+    setFpOtp('');
+    setFpNewPass('');
+    setFpConfirmPass('');
+    setForgotStep('request');
+  };
 
   const handleSignIn = async () => {
     setErrorMsg(null);
@@ -115,6 +183,146 @@ export const AdminLoginScreen: React.FC<AdminLoginScreenProps> = ({ onLoginSucce
                 <Text style={styles.secondaryBtnText}>Back to Sign In</Text>
               </TouchableOpacity>
             </View>
+          ) : forgotMode ? (
+            <View>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                <Mail size={18} color={COLORS.goldDark} />
+                <Text style={{ fontSize: 16, fontWeight: '800', color: COLORS.textPrimary }}>
+                  Forgot Password (Email OTP)
+                </Text>
+              </View>
+              <Text style={{ fontSize: 12, color: COLORS.textSecondary, marginBottom: 14, lineHeight: 17 }}>
+                {forgotStep === 'request'
+                  ? 'Enter your Hotel Admin / Staff Username, Email, or Mobile. We will send a 6-digit OTP to your registered email.'
+                  : `Enter the 6-digit OTP sent to ${fpMaskedEmail || 'your email'} and set a new password.`}
+              </Text>
+
+              {fpFeedback ? (
+                <View
+                  style={[
+                    styles.errorBanner,
+                    fpFeedback.ok && {
+                      backgroundColor: '#ECFDF5',
+                      borderColor: '#A7F3D0',
+                    },
+                  ]}
+                >
+                  <Text style={[styles.errorText, fpFeedback.ok && { color: '#065F46' }]}>
+                    {fpFeedback.text}
+                  </Text>
+                </View>
+              ) : null}
+
+              <View style={styles.fieldGroup}>
+                <Text style={styles.label}>REGISTERED USERNAME / EMAIL / MOBILE</Text>
+                <View style={styles.inputRow}>
+                  <User size={17} color={COLORS.goldDark} />
+                  <TextInput
+                    value={fpIdentifier}
+                    onChangeText={setFpIdentifier}
+                    editable={forgotStep === 'request'}
+                    placeholder="Username, Email, or Mobile"
+                    placeholderTextColor={COLORS.textMuted}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    style={[styles.input, forgotStep === 'verify' && { opacity: 0.65 }]}
+                  />
+                </View>
+              </View>
+
+              {forgotStep === 'verify' && (
+                <>
+                  <View style={styles.fieldGroup}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 7 }}>
+                      <Text style={[styles.label, { marginBottom: 0 }]}>6-DIGIT EMAIL OTP</Text>
+                      <TouchableOpacity disabled={fpLoading} onPress={handleRequestOtp}>
+                        <Text style={{ fontSize: 11.5, fontWeight: '800', color: COLORS.goldDark }}>
+                          Resend OTP
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                    <View style={styles.inputRow}>
+                      <KeyRound size={17} color={COLORS.goldDark} />
+                      <TextInput
+                        value={fpOtp}
+                        onChangeText={(t) => setFpOtp(t.replace(/\D/g, '').slice(0, 6))}
+                        keyboardType="number-pad"
+                        maxLength={6}
+                        placeholder="Enter 6-digit OTP"
+                        placeholderTextColor={COLORS.textMuted}
+                        style={[styles.input, { letterSpacing: 6, fontWeight: '800' }]}
+                      />
+                    </View>
+                  </View>
+
+                  <View style={styles.fieldGroup}>
+                    <Text style={styles.label}>NEW PASSWORD (MIN 6 CHARS)</Text>
+                    <View style={styles.inputRow}>
+                      <Lock size={17} color={COLORS.goldDark} />
+                      <TextInput
+                        value={fpNewPass}
+                        onChangeText={setFpNewPass}
+                        secureTextEntry
+                        placeholder="Enter new password"
+                        placeholderTextColor={COLORS.textMuted}
+                        autoCapitalize="none"
+                        style={styles.input}
+                      />
+                    </View>
+                  </View>
+
+                  <View style={styles.fieldGroup}>
+                    <Text style={styles.label}>CONFIRM NEW PASSWORD</Text>
+                    <View style={styles.inputRow}>
+                      <Lock size={17} color={COLORS.goldDark} />
+                      <TextInput
+                        value={fpConfirmPass}
+                        onChangeText={setFpConfirmPass}
+                        secureTextEntry
+                        placeholder="Repeat new password"
+                        placeholderTextColor={COLORS.textMuted}
+                        autoCapitalize="none"
+                        style={styles.input}
+                      />
+                    </View>
+                  </View>
+                </>
+              )}
+
+              <TouchableOpacity
+                activeOpacity={0.85}
+                disabled={fpLoading}
+                onPress={forgotStep === 'request' ? handleRequestOtp : handleVerifyReset}
+                style={[styles.signInBtn, fpLoading && { opacity: 0.7 }]}
+              >
+                {fpLoading ? (
+                  <ActivityIndicator color={COLORS.espresso} />
+                ) : (
+                  <Text style={styles.signInBtnText}>
+                    {forgotStep === 'request' ? 'Send 6-Digit Email OTP' : 'Verify OTP & Reset Password'}
+                  </Text>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={() => {
+                  if (forgotStep === 'verify') {
+                    setForgotStep('request');
+                    setFpOtp('');
+                    setFpFeedback(null);
+                  } else {
+                    setForgotMode(false);
+                    setFpFeedback(null);
+                  }
+                }}
+                style={[styles.secondaryBtn, { alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6, marginTop: 12 }]}
+              >
+                <ArrowLeft size={14} color={COLORS.espresso} />
+                <Text style={styles.secondaryBtnText}>
+                  {forgotStep === 'verify' ? 'Change Account ID' : 'Back to Sign In'}
+                </Text>
+              </TouchableOpacity>
+            </View>
           ) : (
             <>
               {errorMsg ? (
@@ -180,6 +388,21 @@ export const AdminLoginScreen: React.FC<AdminLoginScreenProps> = ({ onLoginSucce
                 ) : (
                   <Text style={styles.signInBtnText}>Sign In to Hotel Admin Desk</Text>
                 )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={() => {
+                  setForgotMode(true);
+                  setForgotStep('request');
+                  setFpIdentifier(username.trim());
+                  setFpFeedback(null);
+                  setErrorMsg(null);
+                }}
+                style={{ marginTop: 12, alignItems: 'center', paddingVertical: 6 }}
+              >
+                <Text style={{ fontSize: 12.5, fontWeight: '700', color: COLORS.goldDark }}>
+                  Forgot Password? Reset via Email OTP →
+                </Text>
               </TouchableOpacity>
 
               <Text style={styles.liveNote}>

@@ -32,8 +32,15 @@ import {
   fetchLiveHotelStateApi,
   generateLiveInvoiceApi,
   getStoredAdminSession,
+  isValidEmail,
   LIVE_API_BASE_URL,
   logoutHotelAdminApi,
+  sendBookingEmailApi,
+  sendCheckInWelcomeEmailApi,
+  sendCheckoutThankYouEmailApi,
+  sendGuestInvoiceEmailApi,
+  sendNightAuditSummaryEmailApi,
+  sendStaffCredentialsEmailApi,
   submitRenewalRequestApi,
   syncLiveHotelDataApi,
 } from '../api/directStayApi';
@@ -251,6 +258,7 @@ interface PmsContextValue {
   addStaffMember: (input: {
     name: string;
     mobile: string;
+    email?: string;
     department: string;
     designation: string;
     username: string;
@@ -497,6 +505,29 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       rooms: nextRooms,
     });
     setSyncing(false);
+
+    // Auto-dispatch #7 Booking Confirmation Email from Mobile App
+    const firstCreated = createdBookings[0];
+    const guestEmail = String(input.email || firstCreated?.email || '').trim();
+    if (res.ok && isValidEmail(guestEmail) && firstCreated) {
+      void sendBookingEmailApi(session, {
+        hotelName: hotelProfile?.name || 'DirectStay Hotel',
+        eventType: 'booking_confirmation',
+        bookingId: firstCreated.id,
+        guestName: firstCreated.guestName,
+        recipientEmail: guestEmail,
+        mobile: firstCreated.mobile,
+        roomNumber: selectedRooms.join(', '),
+        roomType: firstCreated.roomType,
+        checkInDate: firstCreated.checkInDate,
+        checkOutDate: firstCreated.checkOutDate,
+        nights,
+        totalAmount: createdBookings.reduce((s, b) => s + Number(b.totalPayable || b.bookingAmount || 0), 0),
+        advanceAmount: Number(input.advanceAmount || 0),
+        pendingAmount: createdBookings.reduce((s, b) => s + Number(b.dueAmount || 0), 0),
+        status: 'Confirmed',
+      });
+    }
     return res.ok ? { ok: true } : { ok: false, error: res.error };
   };
 
@@ -774,6 +805,26 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       rooms: nextRooms,
     });
     setSyncing(false);
+
+    // Auto-dispatch #8 Guest Check-In Welcome & WiFi Email from Mobile App
+    const ciEmail = String(input.email || linkedBkg?.email || '').trim();
+    if (res.ok && isValidEmail(ciEmail)) {
+      void sendCheckInWelcomeEmailApi(session, {
+        bookingId: checkInId,
+        hotelName: hotelProfile?.name || 'DirectStay Hotel',
+        hotelPhone: hotelProfile?.phoneNumber || hotelProfile?.phone || '',
+        hotelAddress: hotelProfile?.address || '',
+        guestName: input.guestName.trim(),
+        roomNumber: input.roomNumber,
+        roomType: matchedRoom?.category || 'Deluxe',
+        checkInDate: input.checkInDate,
+        checkOutDate: input.checkOutDate,
+        checkOutTime: String((hotelProfile as any)?.checkOutTime || '11:00 AM'),
+        wifiName: String((hotelProfile as any)?.wifiName || ''),
+        wifiPassword: String((hotelProfile as any)?.wifiPassword || ''),
+        recipientEmail: ciEmail,
+      });
+    }
     return res.ok ? { ok: true, checkInId, grcNumber } : { ok: false, error: res.error };
   };
 
@@ -1067,6 +1118,58 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       invoices: nextInvoices,
     });
     setSyncing(false);
+
+    // Auto-dispatch #6 Guest Tax Invoice & #9 Checkout Thank You Emails from Mobile App
+    const coEmail = String(chk?.email || bkg?.email || '').trim();
+    if (res.ok && isValidEmail(coEmail)) {
+      const hName = hotelProfile?.name || 'DirectStay Hotel';
+      const hPhone = hotelProfile?.phoneNumber || hotelProfile?.phone || '';
+      const hAddr = hotelProfile?.address || '';
+      const invNo = String(builtInvoice.invoiceNumber || builtInvoice.id);
+      void sendGuestInvoiceEmailApi(session, {
+        hotelName: hName,
+        hotelGstin: hotelProfile?.gstNumber || '',
+        hotelAddress: hAddr,
+        hotelPhone: hPhone,
+        guestName,
+        invoiceNumber: invNo,
+        roomNumber: dirtyRoomList.join(', ') || roomNumber,
+        checkInDate: String(builtInvoice.checkInDate || chk?.checkInDate || bkg?.checkInDate || todayStr),
+        checkOutDate: String(builtInvoice.checkOutDate || todayStr),
+        tariffAmount: bill.legacy.roomCharges,
+        foodCharges: bill.legacy.foodCharges,
+        otherCharges: r2(
+          bill.legacy.waterCharges +
+            bill.legacy.laundryCharges +
+            bill.legacy.serviceCharges +
+            bill.legacy.otherCharges +
+            bill.legacy.fineCharges
+        ),
+        discount: bill.discount,
+        cgst: bill.cgst,
+        sgst: bill.sgst,
+        totalAmount: bill.grandTotal,
+        amountPaid: bill.receipts,
+        balanceDue: bill.balance,
+        isWithoutGst: !bill.isGstInvoice,
+        paymentMode: String(input.paymentMethod || builtInvoice.paymentMethod || 'UPI'),
+        recipientEmail: coEmail,
+      });
+      void sendCheckoutThankYouEmailApi(session, {
+        bookingId: targetId,
+        hotelName: hName,
+        hotelPhone: hPhone,
+        hotelAddress: hAddr,
+        guestName,
+        roomNumber: dirtyRoomList.join(', ') || roomNumber,
+        checkInDate: String(builtInvoice.checkInDate || chk?.checkInDate || bkg?.checkInDate || todayStr),
+        checkOutDate: String(builtInvoice.checkOutDate || todayStr),
+        invoiceNumber: invNo,
+        totalAmount: bill.grandTotal,
+        reviewUrl: String((hotelProfile as any)?.googleReviewUrl || ''),
+        recipientEmail: coEmail,
+      });
+    }
     return res.ok ? { ok: true, invoice: builtInvoice } : { ok: false, error: res.error };
   };
 
@@ -1772,6 +1875,31 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const next = [dc, ...state.dailyClosings];
     setState((prev) => ({ ...prev, dailyClosings: next }));
     await syncLiveHotelDataApi(session, { dailyClosings: next });
+
+    // Auto-dispatch #12 Daily Night Audit / Shift Closing Summary to Hotel Owner
+    const ownerEmail = String(hotelProfile?.emailAddress || hotelProfile?.email || '').trim();
+    if (isValidEmail(ownerEmail)) {
+      const occRooms = state.rooms.filter((r) => r.status === 'Occupied').length;
+      const totRooms = Math.max(1, state.rooms.length);
+      void sendNightAuditSummaryEmailApi(session, {
+        hotelName: hotelProfile?.name || 'DirectStay Hotel',
+        date: todayStr,
+        closedBy: session.username,
+        occupancyPct: Math.round((occRooms / totRooms) * 100),
+        occupiedRooms: occRooms,
+        totalRooms: state.rooms.length,
+        openingCash: 0,
+        roomCashIn: dc.cashCollected,
+        posCashIn: 0,
+        cashExpensesOut: 0,
+        expectedClosing: dc.cashCollected,
+        physicalCounted: dc.cashCollected,
+        discrepancy: 0,
+        upiCollected: dc.upiCollected,
+        status: `${dc.shift} Closed`,
+        recipientEmail: ownerEmail,
+      });
+    }
   };
 
   const addWaterBottleLog: PmsContextValue['addWaterBottleLog'] = async (input) => {
@@ -1878,6 +2006,7 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       hotelId: session.hotelId,
       name: input.name.trim(),
       mobile: input.mobile.trim(),
+      email: input.email?.trim() || '',
       department: input.department.trim() || 'Reception',
       designation: input.designation.trim() || 'Receptionist',
       role: input.department.trim() || 'Reception',
@@ -1891,6 +2020,21 @@ export const PmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const next = [st, ...state.staff];
     setState((prev) => ({ ...prev, staff: next }));
     await syncLiveHotelDataApi(session, { staff: next });
+
+    // Auto-dispatch #10 New Staff Login Credentials Email from Mobile App
+    if (st.email && isValidEmail(st.email)) {
+      void sendStaffCredentialsEmailApi(session, {
+        hotelName: hotelProfile?.name || 'DirectStay Hotel',
+        staffName: st.name,
+        role: st.designation,
+        department: st.department,
+        shift: st.shift,
+        loginUrl: 'https://directstay.online/admin',
+        username: st.username,
+        password: input.password.trim(),
+        recipientEmail: st.email,
+      });
+    }
   };
 
   const toggleStaffStatus: PmsContextValue['toggleStaffStatus'] = async (staffId) => {
